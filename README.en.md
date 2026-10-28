@@ -65,7 +65,7 @@ cd NSDou
 # Dependencies and caches stay inside the project.
 bash tools/nsduo/setup-local.sh
 
-# Replace these placeholders with your own values; never commit them.
+# Replace these placeholders with your own values.
 export NSDUO_TEAM_ID='YOUR_TEAM_ID'
 export NSDUO_DEVICE_ID='YOUR_DEVICE_UDID'
 export NSDUO_BUNDLE_ID='com.yourname.nsduo'

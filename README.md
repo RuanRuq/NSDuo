@@ -65,7 +65,7 @@ cd NSDou
 # 依赖与缓存均放在工程内；不会修改全局 shell 或 xcode-select。
 bash tools/nsduo/setup-local.sh
 
-# 以下均替换为自己的信息，不要提交到 Git。
+# 以下均替换为自己的信息。
 export NSDUO_TEAM_ID='YOUR_TEAM_ID'
 export NSDUO_DEVICE_ID='YOUR_DEVICE_UDID'
 export NSDUO_BUNDLE_ID='com.yourname.nsduo'
