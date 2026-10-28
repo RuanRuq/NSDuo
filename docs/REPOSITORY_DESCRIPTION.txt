@@ -1,0 +1,1 @@
+面向 iPhone Duo 的极简 Switch 模拟器，基于 MeloNX/Ryujinx，自动整理游戏、更新与 DLC，内置 VPN/JIT 准备。 | A streamlined Switch emulator for iPhone Duo, with folder import and in-app VPN/JIT preparation.

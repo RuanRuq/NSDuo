@@ -1,0 +1,26 @@
+StikJIT 1.9.0 — bundled with NSDuo JIT Helper
+
+StikJIT contributors: https://github.com/StikDebug/StikJIT
+Source commit: 32287268fa5824f9edce4cb359f5833ce0cf7b00
+Corresponding source: https://github.com/StikDebug/StikJIT/tree/32287268fa5824f9edce4cb359f5833ce0cf7b00
+Source archive: https://github.com/StikDebug/StikJIT/archive/32287268fa5824f9edce4cb359f5833ce0cf7b00.tar.gz
+The pinned archive is fetched and verified by tools/nsduo/fetch-dependencies.py
+to distribution/legal/StikJIT/StikJIT-1.9.0-source.tar.gz (not committed).
+
+StikJIT is licensed under MPL-2.0. NS Duo modifies ScriptRunner to retain all
+64 address bits and validate every debugserver page-write response. Modified
+MPL-2.0 source files are provided at tools/nsduo/stikjit. The reproducible local
+build entry point is tools/nsduo/build-stikjit.py. NS Duo also supplies the
+missing framework Info.plist using upstream project.yml metadata. The helper
+and IPC bridge are NSDuo integration code; no Husk implementation was copied.
+
+Bundled idevice FFI is by Jackson Coxson and contributors:
+https://github.com/jkcoxson/idevice (MIT).
+The StikJIT release does not identify the exact revision of its bundled idevice
+static archive. NSDuo retains that archive unchanged in the source snapshot.
+
+The original universal.js and legacy.js scripts retain the license of their
+StikDebug upstream (AGPL-3.0): https://github.com/StikDebug/StikDebug
+Their exact bundled sources are included in the archive above and separately
+in distribution/legal/StikJIT. StikJIT is a separate library from StikDebug.
+

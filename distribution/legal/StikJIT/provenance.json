@@ -1,0 +1,31 @@
+{
+  "name": "StikJIT",
+  "version": "1.9.0",
+  "commit": "32287268fa5824f9edce4cb359f5833ce0cf7b00",
+  "repository": "https://github.com/StikDebug/StikJIT",
+  "binaryURL": "https://github.com/StikDebug/StikJIT/releases/download/1.9.0/StikJIT.xcframework.zip",
+  "binaryArchiveSHA256": "806664393770c68e75f2b6429955bfdd88cfaad09fec2ba70f8ed615ff90c060",
+  "sourceURL": "https://github.com/StikDebug/StikJIT/archive/32287268fa5824f9edce4cb359f5833ce0cf7b00.tar.gz",
+  "sourceArchiveSHA256": "46d91baaa8c15739d7ee14ee6ee9720c417935d2d3275f85215e0102b8b2b4d9",
+  "machOSHA256": "f15ad5c6766fa07d545be283c1c99eccde6a8baa97d73978a09ec080ca6381df",
+  "localChanges": [
+    "Framework Info.plist supplied from upstream metadata. The executable is rebuilt locally with the source patches described below; upstream binary hashes describe the original release only."
+  ],
+  "licenses": {
+    "StikJIT": "MPL-2.0",
+    "idevice": "MIT",
+    "bundledScripts": "AGPL-3.0 (StikDebug upstream license; original script sources retained)"
+  },
+  "ideviceLicenseBlobSHA": "bae7492bb13eb7f6dca5da07ccd86ef306bb4db9",
+  "ideviceVersionNote": "The StikJIT release contains a prebuilt idevice FFI archive without an exact idevice commit identifier. It has not been rebuilt or replaced.",
+  "localSourcePatch": {
+    "date": "2026-10-28",
+    "sources": "tools/nsduo/stikjit",
+    "build": "tools/nsduo/build-stikjit.py",
+    "changes": [
+      "Preserve all 64 bits of RSP page-write addresses instead of truncating to 9 hex digits.",
+      "Validate every page-write reply and drain each batch before returning a failure."
+    ],
+    "builtBinaryDigest": ".build/StikJIT/build.json"
+  }
+}
