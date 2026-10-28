@@ -127,6 +127,7 @@ flowchart TD
 ## Known limitations
 
 - **Cellular-only cold starts** may fail to connect to local debugging services even when VPN status says connected. Prefer Wi-Fi for JIT preparation; local gameplay in the same prepared process does not require an ongoing debugger connection. Splitting the two buttons does not eliminate the cellular limitation; see the [upstream LocalDevVPN issue](https://github.com/jkcoxson/LocalDevVPN/issues/31).
+- **When Wi-Fi is unavailable**, you can try this sequence: connect the VPN → turn on Airplane Mode → enable JIT → wait until JIT is ready → turn off Airplane Mode, then launch the game. Whether this workaround succeeds depends on the device and OS version.
 - JIT uses OS developer services and private extension interfaces. It is not a permanent permission and needs revalidation after OS changes.
 - Shader preloading can only use collected shaders; it cannot discover every shader a game will need before first play.
 - No general save-state/full-process resume support. Multiplayer, universal compatibility and measured performance gains are not promised.
