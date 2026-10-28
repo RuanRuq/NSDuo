@@ -194,11 +194,11 @@ struct NSDuoLibraryView: View {
         } label: {
             VStack(spacing: 10) {
                 gameCover(game)
-                VStack(spacing: 5) {
+                VStack(spacing: 3) {
                     Text(game.title)
                         .font(.subheadline.weight(.semibold))
                         .foregroundStyle(.primary)
-                        .lineLimit(2, reservesSpace: true)
+                        .lineLimit(2)
                         .multilineTextAlignment(.center)
                         .frame(maxWidth: .infinity)
                     Text(ByteCountFormatter.string(fromByteCount: game.byteCount, countStyle: .file))
