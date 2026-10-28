@@ -71,9 +71,9 @@ struct NSDuoLibraryView: View {
                     } else if library.games.isEmpty && library.importProgress == nil {
                         emptyLibrary
                     } else {
-                        LazyVGrid(columns: [GridItem(.adaptive(minimum: 260), spacing: 16)], spacing: 16) {
+                        LazyVGrid(columns: [GridItem(.adaptive(minimum: 160, maximum: 240), spacing: 20, alignment: .top)], spacing: 24) {
                             ForEach(library.games) { game in
-                                gameCard(game)
+                                gameItem(game)
                             }
                         }
                     }
@@ -188,40 +188,39 @@ struct NSDuoLibraryView: View {
         .padding(.vertical, 64)
     }
 
-    private func gameCard(_ game: NSDuoLibraryGame) -> some View {
+    private func gameItem(_ game: NSDuoLibraryGame) -> some View {
         Button {
             library.prepareForLaunch(game, onReady: onPlay)
         } label: {
-            HStack(spacing: 16) {
+            VStack(spacing: 10) {
                 gameCover(game)
-                VStack(alignment: .leading, spacing: 8) {
+                VStack(spacing: 5) {
                     Text(game.title)
-                        .font(.headline)
+                        .font(.subheadline.weight(.semibold))
                         .foregroundStyle(.primary)
-                        .lineLimit(2)
-                        .multilineTextAlignment(.leading)
+                        .lineLimit(2, reservesSpace: true)
+                        .multilineTextAlignment(.center)
+                        .frame(maxWidth: .infinity)
                     Text(ByteCountFormatter.string(fromByteCount: game.byteCount, countStyle: .file))
-                        .font(.caption)
+                        .font(.caption2)
                         .foregroundStyle(.secondary)
                     if let folder = game.folder {
-                        Text(folder.summary).font(.caption).foregroundStyle(.secondary)
+                        Text(folder.summary)
+                            .font(.caption2).foregroundStyle(.secondary)
+                            .lineLimit(2).multilineTextAlignment(.center)
                     }
                     if library.folderWarnings[game.id] != nil {
-                        Label("检查未完成 · 已保留导入版本", systemImage: "exclamationmark.circle")
-                            .font(.caption).foregroundStyle(.orange)
+                        Label("检查未完成", systemImage: "exclamationmark.circle")
+                            .font(.caption2).foregroundStyle(.orange)
+                            .accessibilityLabel("检查未完成，已保留导入版本")
                     }
-                    Label("点击启动", systemImage: "play.fill")
-                        .font(.caption.weight(.medium))
-                        .foregroundStyle(.tint)
                 }
-                .frame(maxWidth: .infinity, alignment: .leading)
+                .frame(maxWidth: .infinity)
             }
-            .padding(18)
-            .frame(maxWidth: .infinity, minHeight: 130, alignment: .leading)
-            .background(Color(.secondarySystemGroupedBackground), in: RoundedRectangle(cornerRadius: 20))
-            .contentShape(RoundedRectangle(cornerRadius: 20))
+            .frame(maxWidth: .infinity, alignment: .top)
+            .contentShape(Rectangle())
         }
-        .buttonStyle(.plain)
+        .buttonStyle(NSDuoGameItemButtonStyle())
         .disabled(library.isBusy)
         .contextMenu {
             Button("重命名", systemImage: "pencil") {
@@ -239,19 +238,28 @@ struct NSDuoLibraryView: View {
     }
 
     private func gameCover(_ game: NSDuoLibraryGame) -> some View {
-        Group {
-            if let cover = library.covers[game.id] {
-                Image(uiImage: cover).resizable().scaledToFit()
-            } else {
-                Image(systemName: "gamecontroller.fill")
-                    .font(.system(size: 28))
-                    .foregroundStyle(.tint)
+        RoundedRectangle(cornerRadius: 18)
+            .fill(Color.accentColor.opacity(0.09))
+            .aspectRatio(1, contentMode: .fit)
+            .overlay {
+                if let cover = library.covers[game.id] {
+                    Image(uiImage: cover).resizable().scaledToFit()
+                } else {
+                    Image(systemName: "gamecontroller.fill")
+                        .font(.system(size: 48))
+                        .foregroundStyle(.tint)
+                }
             }
-        }
-        .frame(width: 64, height: 64)
-        .background(Color.accentColor.opacity(0.09))
-        .clipShape(RoundedRectangle(cornerRadius: 14))
-        .accessibilityHidden(true)
+            .clipShape(RoundedRectangle(cornerRadius: 18))
+            .overlay(alignment: .bottomTrailing) {
+                Image(systemName: "play.fill")
+                    .font(.system(size: 12, weight: .semibold))
+                    .foregroundStyle(.white)
+                    .frame(width: 32, height: 32)
+                    .background(.black.opacity(0.5), in: Circle())
+                    .padding(10)
+            }
+            .accessibilityHidden(true)
     }
 
     private func importProgressView(_ progress: NSDuoImportProgress) -> some View {
@@ -291,5 +299,11 @@ struct NSDuoLibraryView: View {
         case .saving: "正在保存游戏记录…"
         case .cancelling: "正在取消并清理…"
         }
+    }
+}
+
+private struct NSDuoGameItemButtonStyle: ButtonStyle {
+    func makeBody(configuration: Configuration) -> some View {
+        configuration.label.opacity(configuration.isPressed ? 0.65 : 1)
     }
 }

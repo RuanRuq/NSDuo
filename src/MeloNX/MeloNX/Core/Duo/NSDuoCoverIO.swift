@@ -6,7 +6,7 @@ import UniformTypeIdentifiers
 // manifest so existing libraries and user-renamed titles remain unchanged.
 nonisolated enum NSDuoCoverIO {
     private static let maximumBytes = 1_048_576
-    private static let thumbnailSize = 192 // 64 pt at 3x
+    private static let thumbnailSize = 768 // Preserve source detail for larger grid covers.
 
     static func cachedData(for game: NSDuoLibraryGame, root: URL) -> Data? {
         guard NSDuoLibraryIO.isValidRecord(game) else { return nil }
@@ -47,7 +47,8 @@ nonisolated enum NSDuoCoverIO {
     }
 
     private static func cacheURL(for game: NSDuoLibraryGame, root: URL) -> URL {
-        root.appendingPathComponent("Covers/\(game.sha256).jpg")
+        // Rebuild the former 192 px thumbnails once when upgrading the layout.
+        root.appendingPathComponent("Covers/v2-\(game.sha256).jpg")
     }
 
     private static func makeThumbnail(_ data: Data) -> Data? {
