@@ -181,8 +181,14 @@ struct NSDuoPhoneGuide: View {
                 }
                 Section("以后怎么玩") {
                     Text("点击游戏卡片。如果本次运行尚未准备好，先连接 VPN，再开启 JIT，完成后自动启动已选择的游戏；同一 App 进程内无需重复准备。")
-                    Text("纯蜂窝网络下，本地 VPN 可能显示已连接但无法开启 JIT。上游建议先连 VPN、再开飞行模式后尝试开启 JIT；该办法尚未在本机验证。也可以连接 Wi-Fi 完成 JIT，再恢复蜂窝网络游玩。")
                     Text("首次下载调试环境需要联网。系统更新、重置或配对失效后，可能需要重新配对或清理调试缓存；这些系统首次授权不能由 App 代替确认。")
+                }
+                Section("没有 Wi-Fi 时开启 JIT") {
+                    Text("只有蜂窝网络时，可尝试以下操作，效果取决于设备和系统版本。")
+                    Text("1. 在 NS Duo 点击“连接 VPN”，等待显示“VPN 已连接”。")
+                    Text("2. 打开控制中心，开启飞行模式。")
+                    Text("3. 回到 NS Duo，点击“开启 JIT”，等待显示“JIT 已开启”。")
+                    Text("4. 关闭飞行模式，恢复蜂窝网络后继续游戏。")
                 }
                 Section("组件来源") {
                     Text("内置本地隧道基于 LocalDevVPN，作者包括 SideStore Team、Stossy11 和 Magesh K；调试使用 StikJIT 与 idevice，保留各自许可和署名。")
