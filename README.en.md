@@ -21,6 +21,7 @@ Its purpose is not to play cracked games, distribute pirated content or facilita
 - **Folder import:** XCI, NSP and NSZ, including recursively nested folders with arbitrary names.
 - **Updates and DLC:** match content IDs to the base game; select the highest numeric update version and highest version per DLC ID. Check for changes before launch, when returning to the library and when the app becomes active.
 - **Persistent library:** import once, tap to launch later; long-press to rename or remove a record.
+- **Automatic cover art:** extract embedded game icons and cache thumbnails, including for existing library entries; show a controller placeholder when no icon is available.
 - **NSZ conversion:** stream-decompress to a cached NSP on first import, with progress and cancellation, without modifying the source.
 - **In-app preparation:** bundled local tunnel and separate JIT helper extensions, exposed as **Connect VPN** and **Enable JIT**, without switching between separate apps.
 - **Duo layout:** approximately 60% game / 40% virtual controller in expanded portrait; full game area in landscape with an external controller. Compact pause/library controls at the top right, and subtle haptics on buttons other than sticks.

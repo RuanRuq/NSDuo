@@ -57,6 +57,9 @@ struct NSDuoLibraryView: View {
                     if let progress = library.importProgress {
                         importProgressView(progress)
                     }
+                    if library.isLoadingCovers && library.importProgress == nil {
+                        ProgressView("正在读取游戏封面…").font(.footnote)
+                    }
 
                     if library.isLoading {
                         ProgressView("正在读取游戏库…")
@@ -190,11 +193,7 @@ struct NSDuoLibraryView: View {
             library.prepareForLaunch(game, onReady: onPlay)
         } label: {
             HStack(spacing: 16) {
-                Image(systemName: "gamecontroller.fill")
-                    .font(.system(size: 28))
-                    .foregroundStyle(.tint)
-                    .frame(width: 60, height: 64)
-                    .background(Color.accentColor.opacity(0.09), in: RoundedRectangle(cornerRadius: 14))
+                gameCover(game)
                 VStack(alignment: .leading, spacing: 8) {
                     Text(game.title)
                         .font(.headline)
@@ -237,6 +236,22 @@ struct NSDuoLibraryView: View {
         }
         .accessibilityLabel(game.title)
         .accessibilityHint("轻点启动游戏，长按可重命名或移除 App 内的副本")
+    }
+
+    private func gameCover(_ game: NSDuoLibraryGame) -> some View {
+        Group {
+            if let cover = library.covers[game.id] {
+                Image(uiImage: cover).resizable().scaledToFit()
+            } else {
+                Image(systemName: "gamecontroller.fill")
+                    .font(.system(size: 28))
+                    .foregroundStyle(.tint)
+            }
+        }
+        .frame(width: 64, height: 64)
+        .background(Color.accentColor.opacity(0.09))
+        .clipShape(RoundedRectangle(cornerRadius: 14))
+        .accessibilityHidden(true)
     }
 
     private func importProgressView(_ progress: NSDuoImportProgress) -> some View {

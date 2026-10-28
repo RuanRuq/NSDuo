@@ -38,6 +38,19 @@ final class Ryujinx {
         let arg1Ptr = UnsafeMutablePointer<CChar>(mutating: arg1.utf8String)
         return GameInfo(MeloNX.get_game_info(arg0, arg1Ptr), url: path)
     }
+
+    // The library serializes this metadata-only read with imports and game launch.
+    // Copy the icon before releasing the native result; no UIKit work runs here.
+    nonisolated static func gameIconData(at url: URL) throws -> Data? {
+        let handle = try FileHandle(forReadingFrom: url)
+        defer { try? handle.close() }
+        let info = url.pathExtension.lowercased().withCString {
+            get_game_info(handle.fileDescriptor, UnsafeMutablePointer(mutating: $0))
+        }
+        defer { free_game_info(info) }
+        guard let bytes = info.ImageData, info.ImageSize > 0, info.ImageSize <= 1_048_576 else { return nil }
+        return Data(bytes: bytes, count: Int(info.ImageSize))
+    }
     
     static func attachGamepad(_ id: UnsafeMutableRawPointer?, _ name: String, _ index: Int, _ type: ControllerType) {
         _ = name.withCString { MeloNX.attach_gamepad($0, id, Int32(index), type)  }
@@ -426,10 +439,10 @@ nonisolated fileprivate func install_firmware(_ pathPtr: UnsafePointer<CChar>) -
 fileprivate func init_dualmapping() -> Bool
 
 @_silgen_name("get_game_info")
-fileprivate func get_game_info(_ arg0: Int32, _ arg1: UnsafeMutablePointer<CChar>!) -> GameInfoC
+nonisolated fileprivate func get_game_info(_ arg0: Int32, _ arg1: UnsafeMutablePointer<CChar>!) -> GameInfoC
 
 @_silgen_name("free_game_info")
-func free_game_info(_ gameInfo: GameInfoC)
+nonisolated func free_game_info(_ gameInfo: GameInfoC)
 
 @_silgen_name("attach_gamepad")
 fileprivate func attach_gamepad(_ namePtr: UnsafePointer<CChar>?, _ idPtr: UnsafeMutableRawPointer?, _ playerIndex: Int32, _ controllerType: ControllerType) -> UnsafeMutableRawPointer?

@@ -6,6 +6,7 @@
 import Foundation
 import Combine
 import CryptoKit
+import UIKit
 
 nonisolated enum NSDuoGameFormat: String, Sendable {
     case xci, nsp
@@ -62,6 +63,8 @@ final class NSDuoLibraryStore: ObservableObject {
     static let shared = NSDuoLibraryStore()
 
     @Published private(set) var games: [NSDuoLibraryGame] = []
+    @Published private(set) var covers: [UUID: UIImage] = [:]
+    @Published private(set) var isLoadingCovers = false
     @Published private(set) var importProgress: NSDuoImportProgress?
     @Published private(set) var isLoading = false
     @Published private(set) var isReady = false
@@ -80,6 +83,7 @@ final class NSDuoLibraryStore: ObservableObject {
     private var importOperation: NSDuoImportOperation?
     private var wantsFolderCheck = false
     private var cancelledFolderCheck = false
+    private var coverAttempts: [UUID: String] = [:]
 
     private init() {}
 
@@ -93,6 +97,8 @@ final class NSDuoLibraryStore: ObservableObject {
                 }.value
                 libraryURL = loaded.root
                 games = loaded.games
+                covers = loaded.covers.compactMapValues { UIImage(data: $0) }
+                coverAttempts = Dictionary(uniqueKeysWithValues: loaded.games.filter { covers[$0.id] != nil }.map { ($0.id, $0.sha256) })
                 isReady = true
             } catch {
                 message = "无法读取游戏库：\(error.localizedDescription)"
@@ -120,13 +126,14 @@ final class NSDuoLibraryStore: ObservableObject {
         Task { [self] in
             defer { isCheckingFolders = false }
             _ = await scanFolder(source, previous: nil, reportError: true)
+            await refreshCovers()
         }
     }
 
     func checkFolders() {
         guard isReady else { wantsFolderCheck = true; return }
         guard !isBusy, !isChoosingFiles, cachedLaunchURL == nil, message == nil else { return }
-        guard games.contains(where: { $0.folder != nil }) else { return }
+        guard !games.isEmpty else { return }
         Ryujinx.reloadKeySet()
         isCheckingFolders = true
         cancelledFolderCheck = false
@@ -139,6 +146,7 @@ final class NSDuoLibraryStore: ObservableObject {
                     _ = await scanFolder(source, previous: game, reportError: false)
                 } catch { folderWarnings[game.id] = error.localizedDescription }
             }
+            if !cancelledFolderCheck { await refreshCovers() }
         }
     }
 
@@ -247,6 +255,7 @@ final class NSDuoLibraryStore: ObservableObject {
                     committed = true
                     return updated
                 }.value
+                await refreshCovers()
             } catch {
                 if !operation.isCancelled { message = "导入失败：\(error.localizedDescription)" }
             }
@@ -257,6 +266,28 @@ final class NSDuoLibraryStore: ObservableObject {
         cancelledFolderCheck = true
         if importOperation?.cancel() == true {
             importProgress?.phase = .cancelling
+        }
+    }
+
+    // Every caller already holds the library's busy state. This keeps native
+    // metadata reads off the main thread and prevents racing the emulation core.
+    private func refreshCovers() async {
+        guard let root = libraryURL else { return }
+        isLoadingCovers = true
+        defer { isLoadingCovers = false }
+        let currentIDs = Set(games.map(\.id))
+        covers = covers.filter { currentIDs.contains($0.key) }
+        coverAttempts = coverAttempts.filter { currentIDs.contains($0.key) }
+        for game in games {
+            guard !Task.isCancelled, importOperation?.isCancelled != true else { return }
+            guard coverAttempts[game.id] != game.sha256 else { continue }
+            let data = await Task.detached(priority: .utility) {
+                autoreleasepool { NSDuoCoverIO.load(for: game, root: root) }
+            }.value
+            covers[game.id] = data.flatMap { UIImage(data: $0) }
+            // Failed artwork is retried next session, without rescanning a large
+            // game file every time this library becomes visible in this session.
+            coverAttempts[game.id] = game.sha256
         }
     }
 
@@ -304,6 +335,8 @@ final class NSDuoLibraryStore: ObservableObject {
                     try NSDuoLibraryIO.remove(game, root: root, remaining: remaining)
                 }.value
                 games = remaining
+                covers[game.id] = nil
+                coverAttempts[game.id] = nil
                 folderWarnings[game.id] = nil
                 message = warning
             } catch {
@@ -325,6 +358,7 @@ nonisolated enum NSDuoLibraryIO {
     struct Loaded: Sendable {
         let root: URL
         let games: [NSDuoLibraryGame]
+        let covers: [UUID: Data]
     }
 
     static func load() throws -> Loaded {
@@ -367,7 +401,11 @@ nonisolated enum NSDuoLibraryIO {
                 }
             }
         }
-        return Loaded(root: root, games: games)
+        NSDuoCoverIO.prune(keeping: games, root: root)
+        let covers = games.reduce(into: [UUID: Data]()) { result, game in
+            result[game.id] = NSDuoCoverIO.cachedData(for: game, root: root)
+        }
+        return Loaded(root: root, games: games, covers: covers)
     }
 
     static func checkedURL(for game: NSDuoLibraryGame, root: URL) throws -> URL {
@@ -390,6 +428,7 @@ nonisolated enum NSDuoLibraryIO {
         // Commit removal first; a crash or failed unlink only leaves an orphan that
         // startup retries. Source files and emulator save directories are never touched.
         try save(remaining, root: root)
+        NSDuoCoverIO.prune(keeping: remaining, root: root)
         let retained = Set(remaining.flatMap { [$0.relativePath] + ($0.folder?.files.map(\.relativePath) ?? []) })
         let removedPaths = Set([game.relativePath] + (game.folder?.files.map(\.relativePath) ?? []))
         do {
