@@ -6,6 +6,16 @@ A streamlined Nintendo Switch emulator for iPhone Duo, built on **MeloNX / Ryuji
 
 > Experimental, developer-built software. A general-purpose core does not imply every game works. Compatibility, performance and JIT availability depend on the device, OS and game. This repository contains no games, console keys, firmware, pairing credentials or personal signing material.
 
+## Usage statement
+
+This project is intended for learning, technical research and knowledge sharing, with a focus on emulation principles, system interfaces and mobile adaptation.
+
+**Non-commercial use request:** The maintainers ask that this project be used for non-commercial learning and research, rather than sales, paid distribution or other commercial monetization. This is a voluntary request, not an additional license condition. It does not change rights already granted under existing licenses; each component's applicable license governs its use.
+
+Its purpose is not to play cracked games, distribute pirated content or facilitate infringement. It does not provide such resources or download sources.
+
+**Users must obtain XCI, NSP and NSZ game files themselves through lawful means and ensure they have the rights required to use them.** This project does not supply these files. Required keys, firmware and other materials must also be lawfully provided by the user.
+
 ## Features
 
 - **Folder import:** XCI, NSP and NSZ, including recursively nested folders with arbitrary names.
