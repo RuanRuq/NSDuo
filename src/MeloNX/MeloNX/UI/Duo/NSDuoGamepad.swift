@@ -44,7 +44,7 @@ final class NSDuoGamepadSurface: UIView {
     private var radius: CGFloat = 40
     private var previousBounds = CGRect.zero
     private let input = VirtualControllerManager.shared
-    private let buttonFeedback = UIImpactFeedbackGenerator(style: .soft)
+    private lazy var buttonFeedback = UIImpactFeedbackGenerator(style: .light, view: self)
 
     override init(frame: CGRect) {
         super.init(frame: frame)
@@ -143,10 +143,11 @@ final class NSDuoGamepadSurface: UIView {
         }
         let newlyPressed = next.subtracting(pressed)
         for key in newlyPressed { input.buttonPressed(key.mapping) }
-        // A short, very soft pulse only when buttons become pressed. Stick
-        // movement, held buttons, releases and simultaneous chords do not stack pulses.
-        if !newlyPressed.isEmpty {
-            buttonFeedback.impactOccurred(intensity: 0.1)
+        // Keep the tap subtle but perceptible; the old soft/0.1 pulse was too faint.
+        // One pulse per new press batch, including sliding onto another button.
+        // Stick movement, held buttons and releases do not trigger feedback.
+        if let key = newlyPressed.min(by: { $0.rawValue < $1.rawValue }), let rect = rects[key] {
+            buttonFeedback.impactOccurred(intensity: 0.35, at: CGPoint(x: rect.midX, y: rect.midY))
             buttonFeedback.prepare()
         }
         for key in pressed.subtracting(next) { input.buttonReleased(key.mapping) }

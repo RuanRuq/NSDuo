@@ -1,4 +1,5 @@
 using Ryujinx.Common.Memory;
+using Ryujinx.Common.Logging;
 using Ryujinx.Graphics.GAL;
 using Ryujinx.Graphics.Shader;
 using Silk.NET.Vulkan;
@@ -106,6 +107,7 @@ namespace Ryujinx.Graphics.Vulkan
         private int _pdSequence = 1;
 
         private bool _updateDescriptorCacheCbIndex;
+        private int _reportedTemplateFallbackSets;
 
         [Flags]
         private enum DirtyFlags
@@ -149,10 +151,12 @@ namespace Ryujinx.Graphics.Vulkan
 
             _uniformBuffers = new DescriptorBufferInfo[Constants.MaxUniformBufferBindings];
             _storageBuffers = new DescriptorBufferInfo[Constants.MaxStorageBufferBindings];
-            _textures = new DescriptorImageInfo[Constants.MaxTexturesPerStage];
-            _images = new DescriptorImageInfo[Constants.MaxImagesPerStage];
-            _bufferTextures = new BufferView[Constants.MaxTexturesPerStage];
-            _bufferImages = new BufferView[Constants.MaxImagesPerStage];
+            // Updates index these arrays by the global binding, not a stage-local
+            // index. Match the reference arrays, including interleaved texel buffers.
+            _textures = new DescriptorImageInfo[_textureRefs.Length];
+            _images = new DescriptorImageInfo[_imageRefs.Length];
+            _bufferTextures = new BufferView[_bufferTextureRefs.Length];
+            _bufferImages = new BufferView[_bufferImageRefs.Length];
 
             _uniformSetPd = new int[Constants.MaxUniformBufferBindings];
 
@@ -731,58 +735,30 @@ namespace Ryujinx.Graphics.Vulkan
                 }
                 else
                 {
-                    try
-                    {
-                        UpdateAndBind(cbs, program, PipelineBase.UniformSetIndex, pbp);
-                    }
-                    catch
-                    {
-                        UpdateAndBind(cbs, PipelineBase.UniformSetIndex, pbp);
-                    }
+                    UpdateAndBindWithFallback(cbs, program, PipelineBase.UniformSetIndex, pbp);
                 }
             }
 
             if (_dirty.HasFlag(DirtyFlags.Storage))
             {
-                try
-                {
-                    UpdateAndBind(cbs, program, PipelineBase.StorageSetIndex, pbp);
-                }
-                catch 
-                {
-                    UpdateAndBind(cbs, PipelineBase.TextureSetIndex, pbp);
-                }
+                UpdateAndBindWithFallback(cbs, program, PipelineBase.StorageSetIndex, pbp);
             }
 
             if (_dirty.HasFlag(DirtyFlags.Texture))
+            {
+                if (program.UpdateTexturesWithoutTemplate)
                 {
-                    if (program.UpdateTexturesWithoutTemplate)
-                    {
-                        UpdateAndBindTexturesWithoutTemplate(cbs, program, pbp);
-                    }
-                    else
-                    {
-                        try
-                        {
-                            UpdateAndBind(cbs, program, PipelineBase.TextureSetIndex, pbp);
-                        }
-                        catch
-                        {
-                            UpdateAndBind(cbs, PipelineBase.TextureSetIndex, pbp);
-                        }
-                    }
+                    UpdateAndBindTexturesWithoutTemplate(cbs, program, pbp);
                 }
+                else
+                {
+                    UpdateAndBindWithFallback(cbs, program, PipelineBase.TextureSetIndex, pbp);
+                }
+            }
 
             if (_dirty.HasFlag(DirtyFlags.Image))
             {
-                try
-                {
-                    UpdateAndBind(cbs, program, PipelineBase.ImageSetIndex, pbp);
-                }
-                catch 
-                {
-                    UpdateAndBind(cbs, PipelineBase.ImageSetIndex, pbp);
-                }
+                UpdateAndBindWithFallback(cbs, program, PipelineBase.ImageSetIndex, pbp);
             }
 
             if (program.BindingSegments.Length > PipelineBase.DescriptorSetLayouts)
@@ -793,6 +769,28 @@ namespace Ryujinx.Graphics.Vulkan
             }
 
             _dirty = DirtyFlags.None;
+        }
+
+        private void UpdateAndBindWithFallback(CommandBufferScoped cbs, ShaderCollection program, int setIndex, PipelineBindPoint pbp)
+        {
+            try
+            {
+                UpdateAndBind(cbs, program, setIndex, pbp);
+            }
+            catch (Exception exception)
+            {
+                // Preserve the direct-write fallback, but report its first failure
+                // per set instead of silently swallowing repeated render errors.
+                int setMask = 1 << setIndex;
+                if ((_reportedTemplateFallbackSets & setMask) == 0)
+                {
+                    _reportedTemplateFallbackSets |= setMask;
+                    Logger.Warning?.Print(LogClass.Gpu,
+                        $"Descriptor template update failed for set {setIndex}; retrying the same set without a template. {exception}");
+                }
+
+                UpdateAndBind(cbs, setIndex, pbp);
+            }
         }
 
         [MethodImpl(MethodImplOptions.AggressiveInlining)]
