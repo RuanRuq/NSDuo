@@ -92,12 +92,28 @@ class ControllerManager: ObservableObject {
         }
     }
     
+    private var emulationActive = false
+    private var attachedControllerIDs = Set<String>()
+
+    func setEmulationActive(_ active: Bool) {
+        emulationActive = active
+        let controllers = controllerQueue.sync { _privAllControllers }
+        for controller in controllers {
+            let selected = attachedControllerIDs.contains(controller.id)
+            controller.setRumbleActive(active && selected)
+            controller.setMotionActive(active && selected)
+        }
+    }
+
     func attachAllControllers() {
         attachAllControllers(selectedControllerIds: selectedControllerIdsSnapshot())
     }
     
     private func attachAllControllers(selectedControllerIds: [String]) {
         let config = RyujinxController.shared.settings
+        // Stop old sensors before detaching/reassigning their native gamepads.
+        let active = emulationActive
+        setEmulationActive(false)
         
         controllerQueue.sync {
             for controller in _privAllControllers {
@@ -110,6 +126,8 @@ class ControllerManager: ObservableObject {
                 cont?.attach(index, controllerType: config.controllerType(for: index) ?? .proController)
             }
         }
+        attachedControllerIDs = Set(selectedControllerIds)
+        setEmulationActive(active)
     }
     
     private func selectedControllerIdsSnapshot() -> [String] {

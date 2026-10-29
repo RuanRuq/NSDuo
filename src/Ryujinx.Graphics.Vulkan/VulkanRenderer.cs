@@ -12,11 +12,13 @@ using Silk.NET.Vulkan.Extensions.EXT;
 using Silk.NET.Vulkan.Extensions.KHR;
 using System;
 using System.Collections.Generic;
+using System.Diagnostics;
 using System.Runtime.InteropServices;
 using System.Text.RegularExpressions;
 using System.Threading;
 using Format = Ryujinx.Graphics.GAL.Format;
 using PrimitiveTopology = Ryujinx.Graphics.GAL.PrimitiveTopology;
+using Result = Silk.NET.Vulkan.Result;
 using SamplerCreateInfo = Ryujinx.Graphics.GAL.SamplerCreateInfo;
 
 namespace Ryujinx.Graphics.Vulkan
@@ -53,6 +55,12 @@ namespace Ryujinx.Graphics.Vulkan
         internal Lock BackgroundQueueLock { get; private set; }
         internal Lock QueueLock { get; private set; }
         internal Lock PipelineCreationLock { get; private set; }
+        private readonly Func<string> _pipelineCachePathProvider;
+        private PipelineCacheStorage _pipelineCacheStorage;
+        private long _pipelineCompileCount;
+        private long _pipelineCompileTicks;
+        private long _pipelineWaitTicks;
+        private long _lastSlowCompileLog;
 
         internal MemoryAllocator MemoryAllocator { get; private set; }
         internal HostMemoryAllocator HostMemoryAllocator { get; private set; }
@@ -114,8 +122,10 @@ namespace Ryujinx.Graphics.Vulkan
 
         public event EventHandler<ScreenCaptureImageInfo> ScreenCaptured;
 
-        public VulkanRenderer(Vk api, Func<Instance, Vk, SurfaceKHR> getSurface, Func<string[]> requiredExtensionsFunc, string preferredGpuId)
+        public VulkanRenderer(Vk api, Func<Instance, Vk, SurfaceKHR> getSurface, Func<string[]> requiredExtensionsFunc, string preferredGpuId,
+            Func<string> pipelineCachePathProvider = null)
         {
+            _pipelineCachePathProvider = pipelineCachePathProvider;
             _getSurface = getSurface;
             _getRequiredExtensions = requiredExtensionsFunc;
             _preferredGpuId = preferredGpuId;
@@ -359,6 +369,16 @@ namespace Ryujinx.Graphics.Vulkan
                                              featuresCustomBorderColor.CustomBorderColorWithoutFormat;
 
             ref PhysicalDeviceProperties properties = ref properties2.Properties;
+
+            string pipelineCachePath = _pipelineCachePathProvider?.Invoke();
+            if (!string.IsNullOrEmpty(pipelineCachePath))
+            {
+                fixed (byte* uuid = properties.PipelineCacheUuid)
+                {
+                    _pipelineCacheStorage = new PipelineCacheStorage(pipelineCachePath,
+                        properties.VendorID, properties.DeviceID, properties.DriverVersion, new ReadOnlySpan<byte>(uuid, 16));
+                }
+            }
 
             bool hasDriverProperties = _physicalDevice.TryGetPhysicalDeviceDriverPropertiesKHR(Api, out PhysicalDeviceDriverPropertiesKHR driverProperties);
 
@@ -1067,6 +1087,85 @@ namespace Ryujinx.Graphics.Vulkan
             return !(IsMoltenVk || IsQualcommProprietary);
         }
 
+        internal unsafe PipelineCache CreatePipelineCache()
+        {
+            byte[] data = _pipelineCacheStorage?.Load() ?? [];
+            fixed (byte* bytes = data)
+            {
+                PipelineCacheCreateInfo info = new()
+                {
+                    SType = StructureType.PipelineCacheCreateInfo,
+                    InitialDataSize = (nuint)data.Length,
+                    PInitialData = bytes,
+                };
+                Result result = Api.CreatePipelineCache(_device, in info, null, out PipelineCache cache);
+                if (result != Result.Success && data.Length != 0)
+                {
+                    // Caches are disposable hints. A rejected snapshot must never prevent launch.
+                    info.InitialDataSize = 0;
+                    info.PInitialData = null;
+                    result = Api.CreatePipelineCache(_device, in info, null, out cache);
+                    Logger.Warning?.PrintMsg(LogClass.Gpu, "Driver rejected saved pipeline cache; started a fresh cache.");
+                }
+                else if (data.Length != 0)
+                {
+                    Logger.Info?.PrintMsg(LogClass.Gpu, $"Loaded driver pipeline cache: {data.Length / 1024} KiB.");
+                }
+                result.ThrowOnError();
+                return cache;
+            }
+        }
+
+        internal void RecordPipelineCompile(long requested, long started, Result result)
+        {
+            long finished = Stopwatch.GetTimestamp();
+            long compileTicks = finished - started;
+            long waitTicks = started - requested;
+            Interlocked.Increment(ref _pipelineCompileCount);
+            Interlocked.Add(ref _pipelineCompileTicks, compileTicks);
+            Interlocked.Add(ref _pipelineWaitTicks, waitTicks);
+            // Only log slow work, at most once per second. No per-frame strings or callbacks.
+            if (finished - requested >= Stopwatch.Frequency / 10)
+            {
+                long last = Volatile.Read(ref _lastSlowCompileLog);
+                if (finished - last >= Stopwatch.Frequency && Interlocked.CompareExchange(ref _lastSlowCompileLog, finished, last) == last)
+                {
+                    Logger.Info?.PrintMsg(LogClass.Gpu,
+                        $"Slow pipeline creation: wait={waitTicks * 1000.0 / Stopwatch.Frequency:F1} ms, compile={compileTicks * 1000.0 / Stopwatch.Frequency:F1} ms, result={result}.");
+                }
+            }
+        }
+
+        private unsafe void SavePipelineCache()
+        {
+            long count = Volatile.Read(ref _pipelineCompileCount);
+            Logger.Info?.PrintMsg(LogClass.Gpu,
+                $"Pipeline compilation summary: {count} creations, compile={_pipelineCompileTicks * 1000.0 / Stopwatch.Frequency:F1} ms, wait={_pipelineWaitTicks * 1000.0 / Stopwatch.Frequency:F1} ms.");
+            if (_pipelineCacheStorage == null || count == 0) return;
+
+            // Called after all compiler workers finish, before the pipeline/device are disposed.
+            // Serializing only at shutdown avoids introducing a new mid-game hitch.
+            lock (PipelineCreationLock)
+            {
+                nuint size = 0;
+                Result result = Api.GetPipelineCacheData(_device, _pipeline.PipelineCache, ref size, null);
+                if (result != Result.Success || size < 32 || size > PipelineCacheStorage.MaxDataSize) return;
+
+                byte[] data = new byte[(int)size];
+                fixed (byte* bytes = data)
+                {
+                    result = Api.GetPipelineCacheData(_device, _pipeline.PipelineCache, ref size, bytes);
+                }
+                if (result == Result.Success && size <= (nuint)data.Length)
+                {
+                    bool saved = _pipelineCacheStorage.Save(data.AsSpan(0, (int)size));
+                    Logger.Info?.PrintMsg(LogClass.Gpu, saved
+                        ? $"Saved driver pipeline cache: {size / 1024} KiB."
+                        : "Driver pipeline cache was not saved; existing shader cache is unchanged.");
+                }
+            }
+        }
+
         public unsafe void Dispose()
         {
             if (!_initialized)
@@ -1081,6 +1180,8 @@ namespace Ryujinx.Graphics.Vulkan
             {
                 shader.WaitForBackgroundCompilation();
             }
+
+            SavePipelineCache();
 
             Api.DeviceWaitIdle(_device);
 

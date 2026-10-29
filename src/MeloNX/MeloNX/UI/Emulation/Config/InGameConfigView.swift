@@ -9,23 +9,41 @@ import SwiftUI
 import Melo_Controller
 import Combine
 
+@MainActor
 class InGameConfigView_MenuView: ObservableObject {
-    @Published var hideTask: Task<Void, Never>? = nil
-    @Published var showButton: Bool = false
-    
-    static var shared: InGameConfigView_MenuView = .init()
-    
+    @Published private(set) var showButton = false
+    private var hideTask: Task<Void, Never>?
+    private var hideDeadline = ContinuousClock.now
+    static let shared = InGameConfigView_MenuView()
+
     func triggerButton() {
-        hideTask?.cancel()
-        
-        showButton = true
-        
-        hideTask = Task {
-            try? await Task.sleep(nanoseconds: 5_000_000_000) // 5 seconds
-            if !Task.isCancelled {
-                showButton = false
+        hideDeadline = .now.advanced(by: .seconds(5))
+        if !showButton { showButton = true }
+        // Pointer movement extends the deadline without publishing or creating
+        // and cancelling a new Task for each touch event.
+        guard hideTask == nil else { return }
+        hideTask = Task { [weak self] in
+            while let deadline = self?.hideDeadline {
+                do { try await Task.sleep(until: deadline, clock: .continuous) }
+                catch { return }
+                guard !Task.isCancelled else { return }
+                if let self, self.hideDeadline <= .now {
+                    self.hideTask = nil
+                    if self.showButton { self.showButton = false }
+                    return
+                }
             }
         }
+    }
+
+    func cancelAutoHide() {
+        hideTask?.cancel()
+        hideTask = nil
+    }
+
+    func hide() {
+        cancelAutoHide()
+        if showButton { showButton = false }
     }
 }
 

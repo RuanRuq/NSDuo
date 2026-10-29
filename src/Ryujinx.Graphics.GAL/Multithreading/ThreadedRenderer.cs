@@ -30,7 +30,12 @@ namespace Ryujinx.Graphics.GAL.Multithreading
         private readonly IRenderer _baseRenderer;
         private Thread _gpuThread;
         private Thread _backendThread;
-        private bool _running;
+        private volatile bool _running;
+        private int _disposed;
+        private readonly RendererFaultState _fault = new();
+        private volatile bool _gpuThreadStarted;
+        public bool GpuThreadStarted => _gpuThreadStarted;
+        internal void ThrowIfFaulted() => _fault.ThrowIfFaulted();
 
         private readonly AutoResetEvent _frameComplete = new(true);
 
@@ -83,9 +88,9 @@ namespace Ryujinx.Graphics.GAL.Multithreading
 
             Pipeline = new ThreadedPipeline(this);
             Window = new ThreadedWindow(this, renderer);
-            Buffers = new BufferMap();
-            Sync = new SyncMap();
-            Programs = new ProgramQueue(renderer);
+            Buffers = new BufferMap(_fault);
+            Sync = new SyncMap(_fault);
+            Programs = new ProgramQueue(renderer, _fault);
 
             _galWorkAvailable = new ManualResetEventSlim(false);
             _invokeRun = new ManualResetEventSlim();
@@ -110,12 +115,26 @@ namespace Ryujinx.Graphics.GAL.Multithreading
                 Name = "GPU.MainThread",
             };
 
-            _gpuThread.Start();
+            // Publish ownership before the worker can execute its first callback.
+            _gpuThreadStarted = true;
+            try { _gpuThread.Start(); }
+            catch { _gpuThreadStarted = false; throw; }
 
             RenderLoop();
         }
 
         public void RenderLoop()
+        {
+            try { RenderCommands(); }
+            catch (Exception error)
+            {
+                _fault.Fail(error);
+                _running = false;
+                throw;
+            }
+        }
+
+        private void RenderCommands()
         {
             // Power through the render queue until the Gpu thread work is done.
 
@@ -169,11 +188,13 @@ namespace Ryujinx.Graphics.GAL.Multithreading
 
         internal unsafe T* New<T>() where T : unmanaged, IGALCommand
         {
+            ThrowIfFaulted();
             while (_producerPtr == (Volatile.Read(ref _consumerPtr) + QueueCount - 1) % QueueCount)
             {
                 // If incrementing the producer pointer would overflow, we need to wait.
                 // _consumerPtr can only move forward, so there's no race to worry about here.
 
+                ThrowIfFaulted();
                 Thread.Sleep(1);
             }
 
@@ -218,6 +239,7 @@ namespace Ryujinx.Graphics.GAL.Multithreading
 
         internal void QueueCommand()
         {
+            ThrowIfFaulted();
             int result = Interlocked.Increment(ref _commandCount);
 
             if (result == 1)
@@ -234,12 +256,12 @@ namespace Ryujinx.Graphics.GAL.Multithreading
             QueueCommand();
 
             // Wait for the command to complete.
-            _invokeRun.Wait();
+            _fault.Wait(_invokeRun);
         }
 
         internal void WaitForFrame()
         {
-            _frameComplete.WaitOne();
+            _fault.Wait(_frameComplete);
         }
 
         internal void SignalFrame()
@@ -479,6 +501,7 @@ namespace Ryujinx.Graphics.GAL.Multithreading
 
         private void Interrupt(Action action)
         {
+            ThrowIfFaulted();
             // Interrupt the backend thread from any external thread and invoke the given action.
 
             if (Thread.CurrentThread == _backendThread)
@@ -492,11 +515,13 @@ namespace Ryujinx.Graphics.GAL.Multithreading
                 {
                     while (Interlocked.CompareExchange(ref _interruptAction, action, null) != null)
                     {
+                        ThrowIfFaulted();
+                        Thread.Yield();
                     }
 
                     _galWorkAvailable.Set();
 
-                    _interruptRun.WaitOne();
+                    _fault.Wait(_interruptRun);
                 }
             }
         }
@@ -517,35 +542,43 @@ namespace Ryujinx.Graphics.GAL.Multithreading
 
             while (Volatile.Read(ref _commandCount) > 0)
             {
+                ThrowIfFaulted();
                 wait.SpinOnce();
             }
+            ThrowIfFaulted();
         }
 
         public void Dispose()
         {
+            if (Interlocked.Exchange(ref _disposed, 1) != 0) return;
             GC.SuppressFinalize(this);
-
-            // Dispose must happen from the render thread, after all commands have completed.
-
-            // Stop the GPU thread.
-            _running = false;
-            _galWorkAvailable.Set();
-
-            if (_gpuThread != null && _gpuThread.IsAlive)
+            try
             {
-                _gpuThread.Join();
+                if (_gpuThread != null && _gpuThread != Thread.CurrentThread && _gpuThread.IsAlive)
+                    _gpuThread.Join();
+                // Destruction also enqueues commands. Drain these while the
+                // backend still runs. Before RunLoop there is no consumer.
+                if (_backendThread != null && _backendThread != Thread.CurrentThread)
+                    FlushThreadedCommands();
             }
-
-            // Dispose the renderer.
-            _baseRenderer.Dispose();
-
-            // Dispose events.
-            _frameComplete.Dispose();
-            _galWorkAvailable.Dispose();
-            _invokeRun.Dispose();
-            _interruptRun.Dispose();
-
-            Sync.Dispose();
+            finally
+            {
+                _running = false;
+                _galWorkAvailable.Set();
+                if (_backendThread != null && _backendThread != Thread.CurrentThread && _backendThread.IsAlive)
+                    _backendThread.Join();
+                try { _baseRenderer.Dispose(); }
+                finally
+                {
+                    Array.Clear(_refQueue);
+                    _frameComplete.Dispose();
+                    _galWorkAvailable.Dispose();
+                    _invokeRun.Dispose();
+                    _interruptRun.Dispose();
+                    Sync.Dispose();
+                    Buffers.Dispose();
+                }
+            }
         }
     }
 }

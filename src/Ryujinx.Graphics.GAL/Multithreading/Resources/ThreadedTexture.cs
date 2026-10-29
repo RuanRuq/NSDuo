@@ -52,8 +52,8 @@ namespace Ryujinx.Graphics.GAL.Multithreading.Resources
             else
             {
                 // Scaled copy can happen on another thread for a res scale flush.
-                ThreadedHelpers.SpinUntilNonNull(ref Base);
-                ThreadedHelpers.SpinUntilNonNull(ref dest.Base);
+                ThreadedHelpers.SpinUntilNonNull(_renderer, ref Base);
+                ThreadedHelpers.SpinUntilNonNull(_renderer, ref dest.Base);
 
                 Base.CopyTo(dest.Base, srcRegion, dstRegion, linearFilter);
             }
@@ -80,7 +80,7 @@ namespace Ryujinx.Graphics.GAL.Multithreading.Resources
             }
             else
             {
-                ThreadedHelpers.SpinUntilNonNull(ref Base);
+                ThreadedHelpers.SpinUntilNonNull(_renderer, ref Base);
 
                 return Base.GetData();
             }
@@ -98,7 +98,7 @@ namespace Ryujinx.Graphics.GAL.Multithreading.Resources
             }
             else
             {
-                ThreadedHelpers.SpinUntilNonNull(ref Base);
+                ThreadedHelpers.SpinUntilNonNull(_renderer, ref Base);
 
                 return Base.GetData(layer, level);
             }

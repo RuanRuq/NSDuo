@@ -136,6 +136,15 @@ namespace Ryujinx.Input.Native
             }
         }
 
+        public static void SetMotionSample(nint idPtr, float ax, float ay, float az, float gx, float gy, float gz)
+        {
+            if (_instance != null && _instance._gamepads.TryGetValue(idPtr, out var gamepad) &&
+                gamepad.SetMotionSampleInternal(new(ax, ay, az), new(gx, gy, gz)))
+            {
+                NotifyInputUpdated();
+            }
+        }
+
         public static void ResetState(nint idPtr)
         {
             if (_instance != null && _instance._gamepads.TryGetValue(idPtr, out var gamepad))

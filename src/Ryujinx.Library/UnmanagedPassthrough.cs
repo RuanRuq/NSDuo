@@ -123,6 +123,12 @@ namespace Ryujinx.Library
             NativeGamepadDriver.SetStickAxis(idPtr, stickId, x, y);
         }
 
+        [UnmanagedCallersOnly(EntryPoint = "set_gamepad_motion_sample")]
+        public static void SetMotionSample(IntPtr idPtr, float ax, float ay, float az, float gx, float gy, float gz)
+        {
+            NativeGamepadDriver.SetMotionSample(idPtr, ax, ay, az, gx, gy, gz);
+        }
+
         [UnmanagedCallersOnly(EntryPoint = "set_gamepad_motion_axis")] 
         static void SetMotionData(IntPtr idPtr, int motionType, float x, float y, float z)
         {

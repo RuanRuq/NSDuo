@@ -37,7 +37,7 @@ namespace Ryujinx.Graphics.GAL.Multithreading.Resources
 
         public void Flush()
         {
-            ThreadedHelpers.SpinUntilNonNull(ref Base);
+            ThreadedHelpers.SpinUntilNonNull(_renderer, ref Base);
 
             Base.Flush();
         }
@@ -53,7 +53,7 @@ namespace Ryujinx.Graphics.GAL.Multithreading.Resources
                 bool result = true;
 
                 // A very light lock, as this case is uncommon.
-                ThreadedHelpers.SpinUntilExchange(ref _createLock, 1, 0);
+                ThreadedHelpers.SpinUntilExchange(_renderer, ref _createLock, 1, 0);
 
                 if (Base != null)
                 {
@@ -72,7 +72,7 @@ namespace Ryujinx.Graphics.GAL.Multithreading.Resources
 
         public void Create(IRenderer renderer, CounterType type, System.EventHandler<ulong> eventHandler, float divisor, bool hostReserved)
         {
-            ThreadedHelpers.SpinUntilExchange(ref _createLock, 1, 0);
+            ThreadedHelpers.SpinUntilExchange(_renderer, ref _createLock, 1, 0);
             Base = renderer.ReportCounter(type, eventHandler, divisor, hostReserved || _reserved);
             Volatile.Write(ref _createLock, 0);
         }

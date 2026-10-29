@@ -68,6 +68,11 @@ final class Ryujinx {
         MeloNX.set_gamepad_stick_axis(id, Int32(stickId), x, y)
     }
     
+    static func setGamepadMotionSample(_ id: UnsafeMutableRawPointer?, accelerometer: SIMD3<Float>, gyroscope: SIMD3<Float>) {
+        set_gamepad_motion_sample(id, accelerometer.x, accelerometer.y, accelerometer.z,
+                                 gyroscope.x, gyroscope.y, gyroscope.z)
+    }
+
     static func setGamepadMotion(_ id: UnsafeMutableRawPointer?, motionType: Int, axis: SIMD3<Float>) {
         MeloNX.set_gamepad_motion_axis(id, Int32(motionType), axis.x, axis.y, axis.z)
     }
@@ -500,3 +505,7 @@ fileprivate func toggle_pause_emulation(_ shouldPause: Bool)
 
 
 // installed_firmware_version
+
+@_silgen_name("set_gamepad_motion_sample")
+fileprivate func set_gamepad_motion_sample(_ id: UnsafeMutableRawPointer?, _ ax: Float, _ ay: Float, _ az: Float,
+                                          _ gx: Float, _ gy: Float, _ gz: Float)

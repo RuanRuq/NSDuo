@@ -5,7 +5,6 @@ struct NSDuoPlayView: View {
     @EnvironmentObject private var core: RyujinxController
     @Environment(\.scenePhase) private var scenePhase
     @StateObject private var statistics = StatisticsHandler()
-    @ObservedObject private var menu = InGameConfigView_MenuView.shared
     @State private var confirmExit = false
 
     private var stopping: Bool { core.isStopping }
@@ -36,11 +35,19 @@ struct NSDuoPlayView: View {
                 .frame(width: viewport.width, height: viewport.height)
                 .clipped()
                 .overlay(alignment: .topTrailing) {
-                    if portrait || menu.showButton || core.isPaused || confirmExit {
-                        playControls
-                            .padding(.top, geometry.safeAreaInsets.top + 8)
-                            .padding(.trailing, geometry.safeAreaInsets.trailing + 12)
-                    }
+                    NSDuoPlayControls(alwaysVisible: portrait || core.isPaused || confirmExit,
+                                      isPaused: core.isPaused, stopping: stopping,
+                                      pause: {
+                        releaseInput()
+                        core.isPaused.toggle()
+                        core.wasManuallyPaused = core.isPaused
+                    }, exit: {
+                        releaseInput()
+                        InGameConfigView_MenuView.shared.cancelAutoHide()
+                        confirmExit = true
+                    })
+                    .padding(.top, geometry.safeAreaInsets.top + 8)
+                    .padding(.trailing, geometry.safeAreaInsets.trailing + 12)
                 }
                 if portrait {
                     NSDuoGamepad()
@@ -51,7 +58,7 @@ struct NSDuoPlayView: View {
                         .background(Color(red: 0.075, green: 0.085, blue: 0.11))
                 }
             }
-            .onChange(of: geometry.size) { _ in releaseInput(); menu.showButton = false }
+            .onChange(of: geometry.size) { _ in releaseInput(); InGameConfigView_MenuView.shared.hide() }
         }
         .ignoresSafeArea()
         .statusBarHidden()
@@ -61,7 +68,7 @@ struct NSDuoPlayView: View {
                 // Let the emulation thread report stopped; do not replace its live Metal layer.
                 core.stopGame()
             }
-            Button("取消", role: .cancel) {}
+            Button("取消", role: .cancel) { InGameConfigView_MenuView.shared.triggerButton() }
         } message: {
             Text("未保存的游戏进度会丢失，请先在游戏内保存。")
         }
@@ -72,33 +79,69 @@ struct NSDuoPlayView: View {
             }
         }
         .onAppear {
-            statistics.registerPush()
+            InGameConfigView_MenuView.shared.hide()
+            statistics.registerPush(includeMetrics: false)
             UIApplication.shared.isIdleTimerDisabled = true
+        }
+        .task {
+            while !Task.isCancelled {
+                NSDuoDiagnostics.recordEnvironment()
+                do { try await Task.sleep(for: .seconds(5)) } catch { break }
+            }
+        }
+        .onReceive(NotificationCenter.default.publisher(for: UIApplication.didReceiveMemoryWarningNotification)) { _ in
+            NSDuoDiagnostics.recordEnvironment(memoryWarning: true)
+        }
+        .onReceive(NotificationCenter.default.publisher(for: ProcessInfo.thermalStateDidChangeNotification)) { _ in
+            NSDuoDiagnostics.recordEnvironment()
         }
         .onChange(of: scenePhase) { phase in if phase != .active { releaseInput() } }
         .onDisappear {
+            InGameConfigView_MenuView.shared.hide()
+            statistics.unregisterPush()
             releaseInput()
             UIApplication.shared.isIdleTimerDisabled = false
         }
     }
 
-    private var playControls: some View {
+    private func releaseInput() { NotificationCenter.default.post(name: .nsDuoReleaseInput, object: nil) }
+}
+
+// Menu visibility only invalidates these small controls, not the Metal viewport
+// and the virtual gamepad underneath it.
+private struct NSDuoPlayControls: View {
+    @ObservedObject private var menu = InGameConfigView_MenuView.shared
+    @State private var problemMarked = false
+    let alwaysVisible: Bool
+    let isPaused: Bool
+    let stopping: Bool
+    let pause: () -> Void
+    let exit: () -> Void
+
+    var body: some View {
+        if alwaysVisible || menu.showButton { controls }
+    }
+
+    private var controls: some View {
         HStack(spacing: 2) {
             Button {
-                releaseInput()
-                core.isPaused.toggle()
-                core.wasManuallyPaused = core.isPaused
+                NSDuoDiagnostics.markProblem()
+                problemMarked = true
             } label: {
-                Label(core.isPaused ? "继续游戏" : "暂停游戏", systemImage: core.isPaused ? "play.fill" : "pause.fill")
+                Label(problemMarked ? "再次标记刚才的问题" : "标记刚才的问题", systemImage: problemMarked ? "flag.fill" : "flag")
                     .labelStyle(.iconOnly)
                     .frame(width: 44, height: 44)
                     .contentShape(Rectangle())
             }
-            Button {
-                releaseInput()
-                menu.hideTask?.cancel()
-                confirmExit = true
-            } label: {
+            .foregroundStyle(problemMarked ? .green : .white)
+            .accessibilityHint("保留本次运行的问题日志，可在游戏库的诊断日志中导出")
+            Button(action: pause) {
+                Label(isPaused ? "继续游戏" : "暂停游戏", systemImage: isPaused ? "play.fill" : "pause.fill")
+                    .labelStyle(.iconOnly)
+                    .frame(width: 44, height: 44)
+                    .contentShape(Rectangle())
+            }
+            Button(action: exit) {
                 Label("返回游戏库", systemImage: "square.grid.2x2.fill")
                     .labelStyle(.iconOnly)
                     .frame(width: 44, height: 44)
@@ -112,5 +155,4 @@ struct NSDuoPlayView: View {
         .disabled(stopping)
     }
 
-    private func releaseInput() { NotificationCenter.default.post(name: .nsDuoReleaseInput, object: nil) }
 }

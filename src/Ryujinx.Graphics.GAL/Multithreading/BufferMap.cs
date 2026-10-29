@@ -11,8 +11,10 @@ namespace Ryujinx.Graphics.GAL.Multithreading
     /// The handle returned is a unique identifier that will map to the real buffer when it is available.
     /// Note that any uses within the queue should be safe, but outside you must use MapBufferBlocking.
     /// </summary>
-    class BufferMap
+    class BufferMap : IDisposable
     {
+        private readonly RendererFaultState _fault;
+        public BufferMap(RendererFaultState fault) => _fault = fault;
         private ulong _bufferHandle = 0;
 
         private readonly Dictionary<BufferHandle, BufferHandle> _bufferMap = new();
@@ -89,6 +91,7 @@ namespace Ryujinx.Graphics.GAL.Multithreading
 
             while (true)
             {
+                _fault.ThrowIfFaulted();
                 lock (_inFlight)
                 {
                     if (!_inFlight.Contains(handle))
@@ -97,7 +100,7 @@ namespace Ryujinx.Graphics.GAL.Multithreading
                     }
                 }
 
-                _inFlightChanged.WaitOne();
+                _fault.Wait(_inFlightChanged);
                 signal = true;
             }
 
@@ -109,6 +112,8 @@ namespace Ryujinx.Graphics.GAL.Multithreading
 
             return MapBuffer(handle);
         }
+
+        public void Dispose() => _inFlightChanged.Dispose();
 
         internal BufferRange MapBufferRange(BufferRange range)
         {

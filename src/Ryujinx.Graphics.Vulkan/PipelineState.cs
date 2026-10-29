@@ -1,6 +1,7 @@
 using Ryujinx.Common.Memory;
 using Silk.NET.Vulkan;
 using System;
+using System.Diagnostics;
 using System.Numerics;
 
 namespace Ryujinx.Graphics.Vulkan
@@ -391,11 +392,28 @@ namespace Ryujinx.Graphics.Vulkan
                     pipelineCreateInfo.Stage.PSpecializationInfo = info;
                 }
 
-                Result result;
+                Result result = Result.Success;
+                long requested = Stopwatch.GetTimestamp();
 
                 lock (gd.PipelineCreationLock)
                 {
-                    result = gd.Api.CreateComputePipelines(device, cache, 1, &pipelineCreateInfo, null, &pipelineHandle);
+                    // Another compiler may have filled this entry while we waited for the driver.
+                    // Publish before releasing the same lock, so queued requests reuse that work.
+                    if (!program.TryGetComputePipeline(ref SpecializationData, out pipeline))
+                    {
+                        long started = Stopwatch.GetTimestamp();
+                        result = gd.Api.CreateComputePipelines(device, cache, 1, &pipelineCreateInfo, null, &pipelineHandle);
+                        gd.RecordPipelineCompile(requested, started, result);
+                        if (result == Result.Success)
+                        {
+                            pipeline = program.AddComputePipeline(ref SpecializationData,
+                                new Auto<DisposablePipeline>(new DisposablePipeline(gd.Api, device, pipelineHandle)));
+                        }
+                        else if (!throwOnError && cachePipelineFailure)
+                        {
+                            program.AddComputePipeline(ref SpecializationData, null);
+                        }
+                    }
                 }
 
                 if (throwOnError)
@@ -404,18 +422,11 @@ namespace Ryujinx.Graphics.Vulkan
                 }
                 else if (result.IsError)
                 {
-                    if (cachePipelineFailure)
-                    {
-                        program.AddComputePipeline(ref SpecializationData, null);
-                    }
-
                     return null;
                 }
             }
 
-            pipeline = new Auto<DisposablePipeline>(new DisposablePipeline(gd.Api, device, pipelineHandle));
-
-            return program.AddComputePipeline(ref SpecializationData, pipeline);
+            return pipeline;
         }
 
         public unsafe Auto<DisposablePipeline> CreateGraphicsPipeline(
@@ -441,6 +452,9 @@ namespace Ryujinx.Graphics.Vulkan
             Pipeline pipelineHandle = default;
 
             bool isMoltenVk = gd.IsMoltenVk;
+            // Integer-target workarounds below temporarily change blend bits in Internal.
+            // Always cache by the original draw state, including when publishing under the lock.
+            PipelineUid cacheKey = Internal;
 
             if (isMoltenVk)
             {
@@ -691,11 +705,26 @@ namespace Ryujinx.Graphics.Vulkan
                     RenderPass = renderPass,
                 };
 
-                Result result;
+                Result result = Result.Success;
+                long requested = Stopwatch.GetTimestamp();
 
                 lock (gd.PipelineCreationLock)
                 {
-                    result = gd.Api.CreateGraphicsPipelines(device, cache, 1, &pipelineCreateInfo, null, &pipelineHandle);
+                    if (!program.TryGetGraphicsPipeline(ref cacheKey, out pipeline))
+                    {
+                        long started = Stopwatch.GetTimestamp();
+                        result = gd.Api.CreateGraphicsPipelines(device, cache, 1, &pipelineCreateInfo, null, &pipelineHandle);
+                        gd.RecordPipelineCompile(requested, started, result);
+                        if (result == Result.Success)
+                        {
+                            pipeline = program.AddGraphicsPipeline(ref cacheKey,
+                                new Auto<DisposablePipeline>(new DisposablePipeline(gd.Api, device, pipelineHandle)));
+                        }
+                        else if (!throwOnError && cachePipelineFailure)
+                        {
+                            program.AddGraphicsPipeline(ref cacheKey, null);
+                        }
+                    }
                 }
 
                 if (throwOnError)
@@ -704,11 +733,6 @@ namespace Ryujinx.Graphics.Vulkan
                 }
                 else if (result.IsError)
                 {
-                    if (cachePipelineFailure)
-                    {
-                        program.AddGraphicsPipeline(ref Internal, null);
-                    }
-
                     return null;
                 }
 
@@ -722,9 +746,7 @@ namespace Ryujinx.Graphics.Vulkan
                 }
             }
 
-            pipeline = new Auto<DisposablePipeline>(new DisposablePipeline(gd.Api, device, pipelineHandle));
-
-            return program.AddGraphicsPipeline(ref Internal, pipeline);
+            return pipeline;
         }
 
         private void UpdateVertexAttributeDescriptions(VulkanRenderer gd)

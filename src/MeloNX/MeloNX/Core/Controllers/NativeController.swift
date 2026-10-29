@@ -65,7 +65,7 @@ class NativeController: BaseController {
 
         setupHaptics()
         
-        setupMotion()
+        // Motion starts only after this controller is attached to an active game.
     }
     
     func setupButtonChangeListener(_ button: GCControllerButtonInput, for key: VirtualControllerButton) {

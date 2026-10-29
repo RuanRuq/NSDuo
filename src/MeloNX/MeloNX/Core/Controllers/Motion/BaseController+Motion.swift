@@ -11,7 +11,23 @@ import GameController
 import UIKit
 
 extension BaseController {
-    func setupMotion() {
+    func setMotionActive(_ active: Bool) {
+        guard let generation = motionSession.setActive(active && isActive) else { return }
+        motionQueue.async { [weak self] in
+            guard let self else { return }
+            if active && self.isActive {
+                self.motionSession.withActive(generation) {
+                    self.lastAccel = SIMD3(repeating: .nan)
+                    self.lastGyro = SIMD3(repeating: .nan)
+                    self.setupMotion(generation: generation)
+                }
+            } else {
+                self.stopMotion()
+            }
+        }
+    }
+
+    private func setupMotion(generation: UInt64) {
         if let nativeController, nativeController.motion != nil, !self.usesDeviceHandlers {
             nativeController.motion?.sensorsActive = true
             
@@ -31,7 +47,7 @@ extension BaseController {
                 let accel = SIMD3(-rawAccelX, -rawAccelZ, rawAccelY)
                 let gyro = SIMD3(rawGyroDeg.x, rawGyroDeg.z, -rawGyroDeg.y)
 
-                self.submitMotion(accelerometer: accel, gyroscope: gyro)
+                self.submitMotion(accelerometer: accel, gyroscope: gyro, generation: generation)
             }
         } else {
             guard self.motionManager.isDeviceMotionAvailable else { return }
@@ -53,12 +69,12 @@ extension BaseController {
                 ) * (180.0 / .pi)
 
                 let (mappedAccel, mappedGyro) = self.remapToSwitchCoords(accel: rawAccel, gyro: rawGyro)
-                self.submitMotion(accelerometer: mappedAccel, gyroscope: mappedGyro)
+                self.submitMotion(accelerometer: mappedAccel, gyroscope: mappedGyro, generation: generation)
             }
         }
     }
 
-    func stopMotion() {
+    private func stopMotion() {
         nativeController?.motion?.valueChangedHandler = nil
         nativeController?.motion?.sensorsActive = false
 
@@ -67,16 +83,19 @@ extension BaseController {
         }
     }
 
-    private func submitMotion(accelerometer: SIMD3<Float>, gyroscope: SIMD3<Float>) {
+    private func submitMotion(accelerometer: SIMD3<Float>, gyroscope: SIMD3<Float>, generation: UInt64) {
         guard isActive else { return }
         
         let pointer = self.pointer
         
         motionQueue.async { [weak self] in
-            guard self?.isActive == true else { return }
-            
-            Ryujinx.setGamepadMotion(pointer, motionType: 1, axis: accelerometer)
-            Ryujinx.setGamepadMotion(pointer, motionType: 2, axis: gyroscope)
+            guard let self, self.isActive else { return }
+            self.motionSession.withActive(generation) {
+                guard self.lastAccel != accelerometer || self.lastGyro != gyroscope else { return }
+                self.lastAccel = accelerometer
+                self.lastGyro = gyroscope
+                Ryujinx.setGamepadMotionSample(pointer, accelerometer: accelerometer, gyroscope: gyroscope)
+            }
         }
     }
 

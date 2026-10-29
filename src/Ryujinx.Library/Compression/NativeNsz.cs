@@ -11,11 +11,15 @@ namespace Ryujinx.Library
         [ThreadStatic]
         private static string _lastError;
 
+        [ThreadStatic]
+        private static string _lastSha256;
+
         [UnmanagedCallersOnly(EntryPoint = "nsz_decompress_to_nsp", CallConvs = new[] { typeof(CallConvCdecl) })]
         public static int Decompress(byte* sourceUtf8, byte* destinationUtf8, long availableBytes,
             delegate* unmanaged[Cdecl]<void*, long, long, int> progress, void* context)
         {
             _lastError = null;
+            _lastSha256 = null;
             try
             {
                 string source = Marshal.PtrToStringUTF8((IntPtr)sourceUtf8);
@@ -25,7 +29,7 @@ namespace Ryujinx.Library
                     throw new ArgumentException("NSZ 源路径或目标路径无效。");
                 }
 
-                NszDecompressor.Decompress(source, destination, availableBytes, (written, total) =>
+                _lastSha256 = NszDecompressor.Decompress(source, destination, availableBytes, (written, total) =>
                 {
                     if (progress != null && progress(context, written, total) != 0)
                     {
@@ -45,6 +49,9 @@ namespace Ryujinx.Library
                 return -1;
             }
         }
+
+        [UnmanagedCallersOnly(EntryPoint = "nsz_get_last_sha256", CallConvs = new[] { typeof(CallConvCdecl) })]
+        public static IntPtr GetLastSha256() => _lastSha256 == null ? IntPtr.Zero : Marshal.StringToCoTaskMemUTF8(_lastSha256);
 
         [UnmanagedCallersOnly(EntryPoint = "nsz_get_last_error", CallConvs = new[] { typeof(CallConvCdecl) })]
         public static IntPtr GetLastError()

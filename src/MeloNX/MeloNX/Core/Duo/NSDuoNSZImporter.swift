@@ -17,6 +17,9 @@ nonisolated private func c_nsz_decompress_to_nsp(
     _ context: UnsafeMutableRawPointer
 ) -> Int32
 
+@_silgen_name("nsz_get_last_sha256")
+nonisolated private func c_nsz_get_last_sha256() -> UnsafePointer<CChar>?
+
 @_silgen_name("nsz_get_last_error")
 nonisolated private func c_nsz_get_last_error() -> UnsafePointer<CChar>?
 
@@ -28,7 +31,7 @@ nonisolated enum NSDuoNSZImporter {
     // temporary path. This is synchronous and must run on the import worker.
     static func decompress(source: URL, destination: URL,
                            operation: NSDuoImportOperation,
-                           progress: @escaping @Sendable (NSDuoImportProgress) -> Void) throws {
+                           progress: @escaping @Sendable (NSDuoImportProgress) -> Void) throws -> String {
         try operation.checkCancellation()
         guard source.isFileURL, destination.isFileURL else {
             throw NSDuoNSZError.message("NSZ 解压需要本地文件路径。")
@@ -77,6 +80,15 @@ nonisolated enum NSDuoNSZImporter {
         do {
             // Close the small race between the final native callback and return.
             try operation.checkCancellation()
+            guard let pointer = c_nsz_get_last_sha256() else {
+                throw NSDuoNSZError.message("NSZ 解压未返回完整校验值，请重新导入。")
+            }
+            defer { c_nsz_free_string(pointer) }
+            let hash = String(cString: pointer)
+            guard hash.count == 64, hash.allSatisfy({ "0123456789abcdef".contains($0) }) else {
+                throw NSDuoNSZError.message("NSZ 解压校验值无效，请重新导入。")
+            }
+            return hash
         } catch {
             try? FileManager.default.removeItem(at: destination)
             throw error

@@ -105,12 +105,7 @@ namespace Ryujinx.Graphics.Vulkan
             AutoFlush = new AutoFlushCounter(gd);
             EndRenderPassDelegate = EndRenderPass;
 
-            PipelineCacheCreateInfo pipelineCacheCreateInfo = new()
-            {
-                SType = StructureType.PipelineCacheCreateInfo,
-            };
-
-            gd.Api.CreatePipelineCache(device, in pipelineCacheCreateInfo, null, out PipelineCache).ThrowOnError();
+            PipelineCache = gd.CreatePipelineCache();
 
             _descriptorSetUpdater = new DescriptorSetUpdater(gd, device);
             _vertexBufferUpdater = new VertexBufferUpdater(gd);

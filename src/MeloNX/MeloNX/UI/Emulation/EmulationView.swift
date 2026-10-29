@@ -92,6 +92,7 @@ struct EmulationView: View {
                     
                     Air.play(AnyView(emulationView(true)))
                 }
+                .onDisappear { statisticsHandler.unregisterPush() }
                 .if(!statisticsHandler.started) { view in
                     view
                         .overlay {

@@ -1,0 +1,50 @@
+using System;
+using System.Threading;
+
+class LoopChecks
+{
+    readonly object _exitLock = new();
+    bool _resourcesDisposed = false, _isPaused;
+    volatile bool _isActive = true, _exitRequested, _pauseRequested;
+    readonly AutoResetEvent _inputUpdatedEvent = new(false);
+    readonly ManualResetEvent _pauseEvent = new(true), _exitEvent = new(false);
+    public int Updates, Queues;
+    public readonly AutoResetEvent Updated = new(false);
+    public DeviceStub Device = new();
+    public class SystemStub { public volatile bool Paused; public void TogglePauseEmulation(bool p) => Paused = p; }
+    public class DeviceStub { public SystemStub System = new(); }
+    bool UpdateFrame() { Interlocked.Increment(ref Updates); Updated.Set(); return true; }
+    void ProcessMainThreadQueue() => Interlocked.Increment(ref Queues);
+    /* PRODUCTION_METHODS */
+    static void Check(bool value, string message) { if (!value) throw new Exception(message); }
+    static void Main()
+    {
+        var loop = new LoopChecks();
+        var thread = new Thread(loop.MainLoop) { IsBackground = true };
+        thread.Start();
+        Check(loop.Updated.WaitOne(1000), "running loop did not poll input");
+        Thread.Sleep(250);
+        int updates = Volatile.Read(ref loop.Updates);
+        Check(updates > 1 && updates < 65, $"idle polling excessive: {updates}/250ms");
+        loop.RequestPause(true);
+        Check(SpinWait.SpinUntil(() => loop.Device.System.Paused, 1000), "pause request did not wake loop");
+        Thread.Sleep(25); // Allow the current iteration to finish.
+        int before = Volatile.Read(ref loop.Updates), queues = Volatile.Read(ref loop.Queues);
+        for (int i = 0; i < 20; ++i) { loop.SignalInputUpdated(); Thread.Sleep(10); }
+        Check(loop.Updates == before, "paused game still updates controller state");
+        Check(loop.Queues - queues < 6, "paused motion events keep host loop busy");
+        loop.Updated.Reset();
+        loop.RequestPause(false);
+        Check(loop.Updated.WaitOne(1000), "resume request did not wake input");
+        // Test the signal directly as well as the timed loop; a timed poll could mask a lost wake.
+        loop.RequestExit();
+        Check(loop._exitEvent.WaitOne(1000) && thread.Join(1000), "exit failed to interrupt loop");
+        var stopped = new LoopChecks();
+        stopped.SignalInputUpdated();
+        Check(stopped._inputUpdatedEvent.WaitOne(0), "button/stick event was lost");
+        stopped._resourcesDisposed = true;
+        stopped._inputUpdatedEvent.Dispose();
+        stopped.SignalInputUpdated(); // Must not signal a disposed handle.
+        Console.WriteLine($"PASS: input/pause/exit loop; idle polls observed {updates}/250ms");
+    }
+}

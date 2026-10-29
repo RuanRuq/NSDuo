@@ -20,13 +20,14 @@ Its purpose is not to play cracked games, distribute pirated content or facilita
 
 - **Folder import:** XCI, NSP and NSZ, including recursively nested folders with arbitrary names.
 - **Updates and DLC:** match content IDs to the base game; select the highest numeric update version and highest version per DLC ID. Check for changes before launch, when returning to the library and when the app becomes active.
-- **Persistent library:** import once, tap to launch later; long-press to rename or remove a record.
+- **Persistent library:** import once, tap to launch later; long-press to rename. Removal requires holding a button for five seconds, with border progress and gently increasing haptics.
 - **Automatic cover art:** extract embedded game icons and cache thumbnails, including for existing library entries; show a controller placeholder when no icon is available.
 - **NSZ conversion:** stream-decompress to a cached NSP on first import, with progress and cancellation, without modifying the source.
 - **In-app preparation:** bundled local tunnel and separate JIT helper extensions, exposed as **Connect VPN** and **Enable JIT**, without switching between separate apps.
 - **Duo layout:** approximately 60% game / 40% virtual controller in expanded portrait; full game area in landscape with an external controller. Compact pause/library controls at the top right, and subtle haptics on buttons other than sticks.
 - **Simplified Chinese game language by default**, subject to game support.
-- **Shader caching:** disk caching enabled for every game to reuse encountered shaders and reduce repeated compilation; not a guarantee of stutter-free play.
+- **Shader and driver pipeline caching:** reuse encountered shaders and save driver pipeline caches on orderly shutdown for later launches. Cache validation checks device/driver compatibility, and concurrent duplicate compilation is coalesced without reducing resolution or skipping draws. First-time content may still stutter.
+- **Local diagnostics:** automatically record loading, compilation, frame intervals and device state during normal play. Mark issues, export records or clear logs; nothing is uploaded automatically.
 
 ## Usage
 
@@ -57,11 +58,19 @@ Games/
 
 Choose **Add Game Folder**. Matching uses package metadata, not folder names. Put later updates/DLC anywhere inside the same root. Importing an individual base-game file is also supported; updates and DLC cannot launch independently.
 
-The app stores security-scoped bookmarks and its own copies. If the external folder becomes unavailable, the last successful import is retained. Removing a source file does not automatically uninstall imported content. Removing a library entry preserves originals and saves; uninstalling the app deletes its local data. Reserve enough storage for decompressed NSZ content.
+The app stores security-scoped bookmarks and its own copies. If the external folder becomes unavailable, it launches the validated local copies directly, without a missing-source or cached-version confirmation. Removing a source file does not automatically uninstall imported content. New updates or DLC cannot be discovered while the source is inaccessible; add that game's folder again to restore scanning. Missing or invalid app-owned content still produces an error. Reserve enough storage for decompressed NSZ content.
+
+Long-press a game card, choose removal, then continuously hold the confirmation button for five seconds. Releasing, moving off the button or backgrounding cancels the hold. Removing a library entry preserves originals and saves; uninstalling the app deletes its local data.
 
 ### 3. Pause, exit and save
 
 Pause retains the running state within the current process. Returning to the library stops the current game and cleans up core resources. **It does not create an automatic save state or promise to resume at that exact point next time.** Save using the game's own save function before exiting.
+
+### 4. Review and clear logs
+
+Tap the flag at the top right during play to mark an issue. Later, open the diagnostic logs from the library menu, select a record and export it for analysis. Logs live in the app's `Documents/Diagnostics`, with size rotation and bounded retention; export records you want to keep long-term. Clearing logs removes only local diagnostic records and temporary exports, preserves games and saves, and allows future sessions to continue recording.
+
+Long-frame and interrupted-session markers are diagnostic clues, not proof of a root cause or substitutes for full iOS crash reports. See the [regression-check documentation](tools/nsduo/tests/README.md) for coverage and recording limits.
 
 ## Build and install
 

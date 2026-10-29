@@ -46,6 +46,9 @@ namespace Ryujinx.Common.Callbacks
         public static void UnregisterManagedCallback(string name)
             => _managedCallbacks.TryRemove(name, out _);
 
+        public static bool HasCallback(string name)
+            => _callbacks.ContainsKey(name) || _managedCallbacks.ContainsKey(name);
+
         public static bool Invoke(string name, ReadOnlySpan<byte> bytes)
         {
             if (_callbacks.TryGetValue(name, out var entry))

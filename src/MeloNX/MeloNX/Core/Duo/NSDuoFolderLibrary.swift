@@ -89,17 +89,16 @@ nonisolated enum NSDuoFolderIO {
         guard sourceValues.isDirectory == true, sourceValues.isSymbolicLink != true else {
             throw LibraryError.message("请选择包含一个游戏本体和附加内容的文件夹。")
         }
-        let bookmark = try source.bookmarkData(options: .minimalBookmark, includingResourceValuesForKeys: nil, relativeTo: nil)
         let sourceFiles = try enumerate(source, operation: operation)
         guard !sourceFiles.isEmpty else { throw LibraryError.message("这个目录及其子目录中没有 XCI、NSP 或 NSZ 文件。") }
         var files = previous?.folder?.files ?? []
+        var contentsChanged = previous == nil
         var created = Set<URL>()
         var committed = false
         defer { if !committed { for file in created { try? manager.removeItem(at: file) } } }
 
         for (relativeSource, url) in sourceFiles {
             try operation.checkCancellation()
-            progress(NSDuoImportProgress(fileName: relativeSource, copiedBytes: 0, totalBytes: 0, phase: .preparing))
             let values = try url.resourceValues(forKeys: [.fileSizeKey, .contentModificationDateKey])
             if let old = files.first(where: { $0.sourcePath == relativeSource }),
                let modified = values.contentModificationDate, old.sourceModified == modified,
@@ -108,12 +107,26 @@ nonisolated enum NSDuoFolderIO {
                                              format: NSDuoGameFormat(url: URL(fileURLWithPath: old.relativePath))!)) == old.byteCount {
                 continue
             }
+            contentsChanged = true
+            progress(NSDuoImportProgress(fileName: relativeSource, copiedBytes: 0, totalBytes: 0, phase: .preparing))
             let file = try cache(source: url, sourcePath: relativeSource, root: root,
                                  operation: operation, created: &created, progress: progress)
             files.removeAll { $0.sourcePath == relativeSource }
             files.append(file)
         }
 
+        // Every scan still checks nested paths, source size/date and cached copies.
+        // A launch immediately after an automatic check need not rewrite the manifest.
+        if !contentsChanged, let folder = previous?.folder {
+            var stale = false
+            _ = try URL(resolvingBookmarkData: folder.bookmark, options: [.withoutUI], relativeTo: nil,
+                        bookmarkDataIsStale: &stale)
+            if !stale {
+                try operation.checkCancellation()
+                return existing
+            }
+        }
+        let bookmark = try source.bookmarkData(options: .minimalBookmark, includingResourceValuesForKeys: nil, relativeTo: nil)
         let baseIDs = Set(files.flatMap(\.contents).filter { $0.kind == "application" }.map(\.applicationID))
         guard baseIDs.count == 1, let applicationID = baseIDs.first else {
             throw LibraryError.message(baseIDs.isEmpty ? "未找到可启动的本体；升级包和 DLC 需要与本体一起放在所选目录下。" : "发现多个游戏本体，请选择只包含一个游戏及其附加内容的目录。")
@@ -136,7 +149,16 @@ nonisolated enum NSDuoFolderIO {
         try NSDuoLibraryIO.save(updated, root: root)
         committed = true
         let retained = Set(updated.flatMap { [$0.relativePath] + ($0.folder?.files.map(\.relativePath) ?? []) })
-        for file in created where !retained.contains("Games/\(file.lastPathComponent)") { try? manager.removeItem(at: file) }
+        let oldPaths = Set(existing.flatMap { [$0.relativePath] + ($0.folder?.files.map(\.relativePath) ?? []) })
+        let candidates = oldPaths.union(created.map { "Games/\($0.lastPathComponent)" })
+        let gamesDirectory = root.appendingPathComponent("Games", isDirectory: true).standardizedFileURL
+        // Only reclaim app-owned files after the new manifest is durable. Keep
+        // every file referenced by any other library entry, including shared DLC.
+        for path in candidates.subtracting(retained) {
+            let file = root.appendingPathComponent(path).standardizedFileURL
+            guard file.deletingLastPathComponent() == gamesDirectory else { continue }
+            try? manager.removeItem(at: file)
+        }
         return updated
     }
 
@@ -157,14 +179,20 @@ nonisolated enum NSDuoFolderIO {
                     throw LibraryError.message("无法读取目录。请在“文件”中确认该目录可用。")
                 }
                 var urls: [(String, URL)] = []
-                for case let url as URL in enumerator {
+                // Foundation may enumerate /private/var for a coordinated /var URL.
+                // Compare canonical paths while keeping the coordinated URLs for IO.
+                let rootPath = readable.resolvingSymlinksInPath().path
+                let prefix = rootPath.hasSuffix("/") ? rootPath : rootPath + "/"
+                while let url = enumerator.nextObject() as? URL {
                     try operation.checkCancellation()
                     let values = try url.resourceValues(forKeys: [.isRegularFileKey, .isSymbolicLinkKey])
-                    if values.isSymbolicLink == true { enumerator.skipDescendants(); continue }
+                    // The enumerator never follows symlinks. Calling skipDescendants
+                    // on a link can skip an unrelated directory after batch prefetch.
+                    if values.isSymbolicLink == true { continue }
                     if values.isRegularFile == true && accepts(url) {
-                        let prefix = readable.path.hasSuffix("/") ? readable.path : readable.path + "/"
-                        guard url.path.hasPrefix(prefix) else { throw LibraryError.message("目录返回了不在所选范围内的文件。") }
-                        urls.append((String(url.path.dropFirst(prefix.count)), url))
+                        let path = url.resolvingSymlinksInPath().path
+                        guard path.hasPrefix(prefix) else { throw LibraryError.message("目录返回了不在所选范围内的文件。") }
+                        urls.append((String(path.dropFirst(prefix.count)), url))
                     }
                 }
                 if let enumerationError { throw enumerationError }
@@ -192,14 +220,15 @@ nonisolated enum NSDuoFolderIO {
                 let format: NSDuoGameFormat = compressed ? .nsp : NSDuoGameFormat(url: source)!
                 let temporary = root.appendingPathComponent("Staging/\(UUID().uuidString).\(format.rawValue)")
                 defer { try? FileManager.default.removeItem(at: temporary) }
+                let hash: String
                 if compressed {
-                    try NSDuoNSZImporter.decompress(source: readable, destination: temporary, operation: operation, progress: progress)
+                    hash = try NSDuoNSZImporter.decompress(source: readable, destination: temporary, operation: operation, progress: progress)
                 } else {
                     let capacity = try root.resourceValues(forKeys: [.volumeAvailableCapacityForImportantUsageKey])
                     if let available = capacity.volumeAvailableCapacityForImportantUsage, available < Int64(sourceBytes) + 1_048_576 {
                         throw LibraryError.message("手机空间不足，需要复制 \(sourcePath)。")
                     }
-                    try streamCopy(readable, to: temporary, byteCount: Int64(sourceBytes), operation: operation, progress: progress)
+                    hash = try streamCopy(readable, to: temporary, byteCount: Int64(sourceBytes), operation: operation, progress: progress)
                 }
                 let after = try readable.resourceValues(forKeys: [.fileSizeKey, .contentModificationDateKey])
                 guard after.fileSize == before.fileSize, after.contentModificationDate == before.contentModificationDate else {
@@ -209,18 +238,6 @@ nonisolated enum NSDuoFolderIO {
                 let input = try FileHandle(forReadingFrom: temporary)
                 defer { try? input.close() }
                 try NSDuoLibraryIO.checkHeader(input, format: format, fileSize: size)
-                try input.seek(toOffset: 0)
-                var hasher = SHA256()
-                while true {
-                    try operation.checkCancellation()
-                    let count = try autoreleasepool {
-                        let data = try input.read(upToCount: 4 * 1_024 * 1_024) ?? Data()
-                        hasher.update(data: data)
-                        return data.count
-                    }
-                    if count == 0 { break }
-                }
-                let hash = hasher.finalize().map { String(format: "%02x", $0) }.joined()
                 let contents = try NSDuoPackageInspector.inspect(temporary)
                 guard !contents.isEmpty else { throw LibraryError.message("\(sourcePath) 没有可识别的游戏内容，请检查文件与密钥。") }
                 let path = "Games/\(hash).\(format.rawValue)"
@@ -242,13 +259,14 @@ nonisolated enum NSDuoFolderIO {
 
     private static func streamCopy(_ source: URL, to destination: URL, byteCount: Int64,
                                    operation: NSDuoImportOperation,
-                                   progress: @escaping @Sendable (NSDuoImportProgress) -> Void) throws {
+                                   progress: @escaping @Sendable (NSDuoImportProgress) -> Void) throws -> String {
         let input = try FileHandle(forReadingFrom: source)
         defer { try? input.close() }
         try Data().write(to: destination, options: .withoutOverwriting)
         let output = try FileHandle(forWritingTo: destination)
         defer { try? output.close() }
         var count: Int64 = 0
+        var hasher = SHA256()
         var lastReport = Date.distantPast
         while true {
             try operation.checkCancellation()
@@ -256,6 +274,7 @@ nonisolated enum NSDuoFolderIO {
                 let chunk = try input.read(upToCount: 4 * 1_024 * 1_024) ?? Data()
                 guard Int64(chunk.count) <= byteCount - count else { throw LibraryError.message("源文件大小发生变化。") }
                 try output.write(contentsOf: chunk)
+                hasher.update(data: chunk)
                 return chunk.count
             }
             if copied == 0 { break }
@@ -267,6 +286,7 @@ nonisolated enum NSDuoFolderIO {
         }
         guard count == byteCount else { throw LibraryError.message("源文件未完整读取。") }
         try output.synchronize()
+        return hasher.finalize().map { String(format: "%02x", $0) }.joined()
     }
 
     static func configure(_ game: NSDuoLibraryGame, root: URL) throws {

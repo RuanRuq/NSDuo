@@ -21,6 +21,11 @@ namespace Ryujinx.Input
         /// </summary>
         Vector2[] GetPositions();
 
+        // Return IDs and positions in one snapshot. A lifted finger must not
+        // renumber the remaining contacts between the input and HID threads.
+        (int Id, Vector2 Position)[] GetTouchPoints()
+            => GetPositions().Select((position, id) => (id, position)).ToArray();
+
         /// <summary>
         /// Get the client size.
         /// </summary>

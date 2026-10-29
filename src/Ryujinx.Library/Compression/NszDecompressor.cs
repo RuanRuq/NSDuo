@@ -29,7 +29,7 @@ namespace Ryujinx.Library
         private sealed record NczMetadata(List<Section> Sections, long OutputSize, long PayloadOffset,
             long PayloadSize, uint[] BlockSizes, long BlockSize);
 
-        internal static void Decompress(string sourcePath, string destinationPath, long availableBytes,
+        internal static string Decompress(string sourcePath, string destinationPath, long availableBytes,
             Action<long, long> progress)
         {
             if (Path.GetFullPath(sourcePath) == Path.GetFullPath(destinationPath))
@@ -67,10 +67,11 @@ namespace Ryujinx.Library
 
                 // CreateNew is deliberate: even on failure, never overwrite/delete a
                 // pre-existing game or a destination belonging to another import.
-                using (FileStream destination = new(destinationPath, FileMode.CreateNew, FileAccess.Write,
+                using (FileStream file = new(destinationPath, FileMode.CreateNew, FileAccess.Write,
                     FileShare.None, BufferSize, FileOptions.SequentialScan))
                 {
                     ownsDestination = true;
+                    using HashingWriteStream destination = new(file);
                     destination.Write(header);
                     long written = header.Length;
                     byte[] buffer = new byte[BufferSize];
@@ -100,8 +101,9 @@ namespace Ryujinx.Library
                         throw new InvalidDataException("NSZ 文件在读取期间发生变化或解压长度不一致。");
                     }
                     progress(written, outputSize);
-                    destination.Flush(flushToDisk: true);
+                    file.Flush(flushToDisk: true);
                     progress(written, outputSize);
+                    return destination.FinishHash();
                 }
             }
             catch
@@ -113,6 +115,34 @@ namespace Ryujinx.Library
                     catch (UnauthorizedAccessException) { }
                 }
                 throw;
+            }
+        }
+
+        // Hash the complete reconstructed NSP, including its PFS header. The
+        // separate per-NCA integrity checks below remain unchanged.
+        private sealed class HashingWriteStream(Stream output) : Stream
+        {
+            private readonly IncrementalHash _hash = IncrementalHash.CreateHash(HashAlgorithmName.SHA256);
+            public string FinishHash() => Convert.ToHexStringLower(_hash.GetHashAndReset());
+            public override void Write(ReadOnlySpan<byte> bytes)
+            {
+                output.Write(bytes);
+                _hash.AppendData(bytes);
+            }
+            public override void Write(byte[] buffer, int offset, int count) => Write(buffer.AsSpan(offset, count));
+            public override bool CanRead => false;
+            public override bool CanSeek => false;
+            public override bool CanWrite => true;
+            public override long Length => output.Length;
+            public override long Position { get => output.Position; set => throw new NotSupportedException(); }
+            public override void Flush() => output.Flush();
+            public override int Read(byte[] buffer, int offset, int count) => throw new NotSupportedException();
+            public override long Seek(long offset, SeekOrigin origin) => throw new NotSupportedException();
+            public override void SetLength(long value) => throw new NotSupportedException();
+            protected override void Dispose(bool disposing)
+            {
+                if (disposing) _hash.Dispose();
+                base.Dispose(disposing); // The enclosing scope owns the file.
             }
         }
 
@@ -335,7 +365,7 @@ namespace Ryujinx.Library
             return header;
         }
 
-        private static void RestoreNcz(FileStream source, FileStream destination, Entry entry, byte[] buffer,
+        private static void RestoreNcz(FileStream source, Stream destination, Entry entry, byte[] buffer,
             bool ticketless, Action<long, long> progress, long writtenBeforeEntry, long total)
         {
             NczMetadata metadata = ReadNczMetadata(source, entry.Offset, entry.Size,

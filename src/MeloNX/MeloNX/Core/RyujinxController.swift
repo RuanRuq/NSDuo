@@ -154,7 +154,9 @@ class RyujinxController: ObservableObject {
             return _isPaused
         } set {
             guard emulationThreadActive, !isStopping, newValue != _isPaused else { return }
+            if newValue { NotificationCenter.default.post(name: .nsDuoReleaseInput, object: nil) }
             _isPaused = newValue
+            controllerManager.setEmulationActive(!newValue)
             Ryujinx.togglePauseEmulation(_isPaused)
         }
     }
@@ -188,7 +190,9 @@ class RyujinxController: ObservableObject {
 
     func stopGame() {
         guard emulationThreadActive, !isStopping else { return }
+        NotificationCenter.default.post(name: .nsDuoReleaseInput, object: nil)
         isStopping = true
+        controllerManager.setEmulationActive(false)
         wasManuallyPaused = false
         // The owner thread resumes paused guest work before draining the GPU.
         // Keep its Metal view and running state alive until mainRyu returns.
@@ -251,7 +255,8 @@ class RyujinxController: ObservableObject {
         wasManuallyPaused = false
         isStopping = false
         emulationThreadActive = true
-        
+        controllerManager.setEmulationActive(true)
+
         let nativeSettingsManager = NativeSettingsManager.shared
         
         if !(nativeSettingsManager.writeStdout.value as Bool) {
@@ -263,6 +268,7 @@ class RyujinxController: ObservableObject {
             
             DispatchQueue.main.async {
                 self.emulationThreadActive = false
+                self.controllerManager.setEmulationActive(false)
                 self.isStopping = false
                 self._isPaused = false
                 self.wasManuallyPaused = false

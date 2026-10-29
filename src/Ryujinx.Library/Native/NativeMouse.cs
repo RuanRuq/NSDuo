@@ -33,6 +33,8 @@ namespace Ryujinx.Library
             return _driver.CurrentPosition;
         }
 
+        public (int Id, Vector2 Position)[] GetTouchPoints() => _driver.GetTouchPoints();
+
         public Vector2 GetScroll()
         {
             return _driver.Scroll;

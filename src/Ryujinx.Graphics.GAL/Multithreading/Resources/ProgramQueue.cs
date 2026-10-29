@@ -13,12 +13,14 @@ namespace Ryujinx.Graphics.GAL.Multithreading.Resources
         private const int MaxConcurrentCompilations = 8;
 
         private readonly IRenderer _renderer;
+        private readonly RendererFaultState _fault;
 
         private readonly Queue<IProgramRequest> _toCompile;
         private readonly List<ThreadedProgram> _inProgress;
 
-        public ProgramQueue(IRenderer renderer)
+        public ProgramQueue(IRenderer renderer, RendererFaultState fault)
         {
+            _fault = fault;
             _renderer = renderer;
 
             _toCompile = new Queue<IProgramRequest>();
@@ -94,6 +96,7 @@ namespace Ryujinx.Graphics.GAL.Multithreading.Resources
 
             while (program.Base == null)
             {
+                _fault.ThrowIfFaulted();
                 ProcessQueue();
 
                 if (program.Base == null)
@@ -114,6 +117,7 @@ namespace Ryujinx.Graphics.GAL.Multithreading.Resources
 
             while (!program.Compiled)
             {
+                _fault.ThrowIfFaulted();
                 ProcessQueue();
 
                 if (!program.Compiled)

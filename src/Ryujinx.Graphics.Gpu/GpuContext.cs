@@ -461,23 +461,25 @@ namespace Ryujinx.Graphics.Gpu
         /// </summary>
         public void Dispose()
         {
-            GPFifo.Dispose();
-            HostInitalized.Dispose();
-            _gpuReadyEvent.Dispose();
-
-            // Has to be disposed before processing deferred actions, as it will produce some.
-            foreach (PhysicalMemory physicalMemory in PhysicalMemoryRegistry.Values)
+            var failures = new System.Collections.Generic.List<Exception>();
+            void CleanUp(Action action)
             {
-                physicalMemory.Dispose();
+                try { action(); }
+                catch (Exception error) { failures.Add(error); }
             }
+            CleanUp(GPFifo.Dispose);
+            CleanUp(HostInitalized.Dispose);
+            CleanUp(_gpuReadyEvent.Dispose);
 
-            SupportBufferUpdater.Dispose();
-
+            // A failed backend rejects queued destruction too. Still release
+            // every independent resource and always stop/join the renderer.
+            foreach (PhysicalMemory physicalMemory in PhysicalMemoryRegistry.Values)
+                CleanUp(physicalMemory.Dispose);
+            CleanUp(SupportBufferUpdater.Dispose);
             PhysicalMemoryRegistry.Clear();
-
-            RunDeferredActions();
-
-            Renderer.Dispose();
+            CleanUp(RunDeferredActions);
+            CleanUp(Renderer.Dispose);
+            if (failures.Count > 0) throw new AggregateException("GPU cleanup failed.", failures);
         }
     }
 }

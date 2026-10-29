@@ -37,7 +37,8 @@ namespace Ryujinx.Library
     {
         protected const int DefaultWidth = 1280;
         protected const int DefaultHeight = 720;
-        private const int TargetFps = 60;
+        // Statistics do not drive rendering; the first-frame event is sent immediately.
+        private const int StatisticsUpdateRate = 4;
 
         private static readonly ConcurrentQueue<Action> _mainThreadActions = new();
 
@@ -118,7 +119,7 @@ namespace Ryujinx.Library
             _keyboardInterface = (IKeyboard)_inputManager.KeyboardDriver.GetGamepad("0");
             _glLogLevel = glLogLevel;
             _chrono = new Stopwatch();
-            _ticksPerFrame = Stopwatch.Frequency / TargetFps;
+            _ticksPerFrame = Stopwatch.Frequency / StatisticsUpdateRate;
             _gpuCancellationTokenSource = new CancellationTokenSource();
             _exitEvent = new ManualResetEvent(false);
             _gpuDoneEvent = new ManualResetEvent(false);
@@ -137,7 +138,7 @@ namespace Ryujinx.Library
         {
             lock (_exitLock)
             {
-                if (!_resourcesDisposed) _inputUpdatedEvent.Set();
+                if (!_resourcesDisposed && !_pauseRequested) _inputUpdatedEvent.Set();
             }
         }
 
@@ -207,14 +208,14 @@ namespace Ryujinx.Library
             }
             catch (OperationCanceledException) when (_exitRequested)
             {
-                _gpuDoneEvent.Set();
+                SignalGpuDoneBeforeWorkerStart();
             }
             catch (Exception error)
             {
                 RecordRenderFailure(error);
                 RequestExit();
                 // Initialization may fail before RunLoop starts the GPU worker.
-                _gpuDoneEvent.Set();
+                SignalGpuDoneBeforeWorkerStart();
             }
             finally
             {
@@ -223,13 +224,23 @@ namespace Ryujinx.Library
             }
         }
 
+        private void SignalGpuDoneBeforeWorkerStart()
+        {
+            // Once the worker starts, only its finally block can signal done.
+            // A backend exception must not let teardown race a live GPU worker.
+            if (Device?.Gpu.Renderer is not ThreadedRenderer threaded || !threaded.GpuThreadStarted)
+                _gpuDoneEvent.Set();
+        }
+
         private void RecordRenderFailure(Exception error)
         {
             Interlocked.CompareExchange(ref _renderFailure, error, null);
+            GameDiagnostics.Problem($"renderer_exception: {error}");
         }
 
         private void RenderCore()
         {
+            GameDiagnostics.Phase("initializing_renderer");
             InitializeWindowRenderer();
 
             Device.Gpu.Renderer.Initialize(_glLogLevel);
@@ -249,7 +260,9 @@ namespace Ryujinx.Library
                 try
                 {
                     Device.Gpu.SetGpuThread();
+                    GameDiagnostics.Phase("loading_shader_cache");
                     Device.Gpu.InitializeShaderCache(_gpuCancellationTokenSource.Token);
+                    GameDiagnostics.Phase("waiting_first_frame");
 
                     while (_isActive && !_exitRequested)
                     {
@@ -274,6 +287,7 @@ namespace Ryujinx.Library
 
                         if (Device.PresentLoop(SwapBuffers))
                         {
+                            GameDiagnostics.Frame();
                             if (!_ranFirstFrame)
                             {
                                 _ranFirstFrame = true;
@@ -378,11 +392,14 @@ namespace Ryujinx.Library
                 }
 
                 if (_exitRequested) break;
-                UpdateFrame();
+                if (!_isPaused) UpdateFrame();
 
                 ProcessMainThreadQueue();
 
-                _inputUpdatedEvent.WaitOne(1);
+                // Button/stick changes and pause/exit requests wake this event
+                // immediately. Poll touch/keyboard at 125 Hz, idle at 10 Hz while
+                // paused so queued host actions can still complete.
+                _inputUpdatedEvent.WaitOne(_isPaused ? 100 : 8);
             }
 
             _exitEvent.Set();
@@ -476,6 +493,7 @@ namespace Ryujinx.Library
             double fps = before ? Sanitize(Device.Statistics.GetGameFrameRate()) : 0d;
             double frameTime = before ? Sanitize(Device.Statistics.GetGameFrameTime()) : 0d;
             double fifo = before ? Sanitize(Device.Statistics.GetFifoPercent())   : 0d;
+            GameDiagnostics.Statistics(fps, frameTime, fifo);
 
             BinaryPrimitives.WriteDoubleLittleEndian(bytes[0..],  fps);
             BinaryPrimitives.WriteDoubleLittleEndian(bytes[8..],  frameTime);

@@ -143,6 +143,17 @@ namespace Ryujinx.Input.Native
             return false;
         }
 
+        internal bool SetMotionSampleInternal(Vector3 accelerometer, Vector3 gyroscope)
+        {
+            lock (_stateLock)
+            {
+                if (_motionStates[0] == accelerometer && _motionStates[1] == gyroscope) return false;
+                _motionStates[0] = accelerometer;
+                _motionStates[1] = gyroscope;
+                return true;
+            }
+        }
+
         public GamepadStateSnapshot GetStateSnapshot()
         {
             return IGamepad.GetStateSnapshot(this);

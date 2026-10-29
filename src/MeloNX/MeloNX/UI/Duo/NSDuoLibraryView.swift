@@ -21,6 +21,7 @@ struct NSDuoLibraryView: View {
     @State private var pendingRemoval: NSDuoLibraryGame?
     @State private var pendingRename: NSDuoLibraryGame?
     @State private var renamedTitle = ""
+    @State private var showingDiagnostics = false
 
     init(onPlay: @escaping (URL) -> Void, onPrepare: @escaping () -> Void,
          onImportFolder: @escaping (URL) -> Void, onImportFile: @escaping (URL) -> Void,
@@ -92,6 +93,7 @@ struct NSDuoLibraryView: View {
                             library.isChoosingFiles = true
                             showingImporter = true
                         }
+                        Button("诊断日志", systemImage: "doc.text.magnifyingglass") { showingDiagnostics = true }
                     } label: { Image(systemName: "ellipsis.circle") }
                     .disabled(!library.isReady || library.isBusy)
                 }
@@ -113,6 +115,7 @@ struct NSDuoLibraryView: View {
             }
         }
         .task { library.loadIfNeeded(); onLibraryAppear() }
+        .sheet(isPresented: $showingDiagnostics) { NSDuoDiagnosticsView() }
         .onChange(of: showingImporter) { _, shown in library.isChoosingFiles = shown }
         .fileImporter(isPresented: $showingImporter,
                       allowedContentTypes: importingFolder ? [.folder] : [.xci, .nsp, UTType(filenameExtension: "nsz") ?? .data],
@@ -133,16 +136,7 @@ struct NSDuoLibraryView: View {
             get: { library.message != nil },
             set: { if !$0 { library.message = nil } }
         )) {
-            if let cached = library.cachedLaunchURL {
-                Button("使用已导入版本") {
-                    library.cachedLaunchURL = nil
-                    library.message = nil
-                    onPlay(cached)
-                }
-                Button("取消", role: .cancel) { library.cachedLaunchURL = nil; library.message = nil }
-            } else {
-                Button("好", role: .cancel) { library.message = nil }
-            }
+            Button("好", role: .cancel) { library.message = nil }
         } message: {
             Text(library.message ?? "")
         }
@@ -158,17 +152,10 @@ struct NSDuoLibraryView: View {
             .disabled(renamedTitle.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty || library.isBusy)
             Button("取消", role: .cancel) { pendingRename = nil }
         }
-        .confirmationDialog("移除这个游戏？", isPresented: Binding(
-            get: { pendingRemoval != nil },
-            set: { if !$0 { pendingRemoval = nil } }
-        ), titleVisibility: .visible, presenting: pendingRemoval) { game in
-            Button("移除游戏", role: .destructive) {
+        .sheet(item: $pendingRemoval) { game in
+            NSDuoRemovalConfirmationView(game: game, isBusy: library.isBusy) {
                 library.remove(game)
-                pendingRemoval = nil
             }
-            Button("取消", role: .cancel) { pendingRemoval = nil }
-        } message: { game in
-            Text("仅删除“\(game.title)”在 App 内的副本和游戏库记录，不会删除“文件”中的源文件或游戏存档。")
         }
     }
 
@@ -208,11 +195,6 @@ struct NSDuoLibraryView: View {
                         Text(folder.summary)
                             .font(.caption2).foregroundStyle(.secondary)
                             .lineLimit(2).multilineTextAlignment(.center)
-                    }
-                    if library.folderWarnings[game.id] != nil {
-                        Label("检查未完成", systemImage: "exclamationmark.circle")
-                            .font(.caption2).foregroundStyle(.orange)
-                            .accessibilityLabel("检查未完成，已保留导入版本")
                     }
                 }
                 .frame(maxWidth: .infinity)
@@ -305,5 +287,35 @@ struct NSDuoLibraryView: View {
 private struct NSDuoGameItemButtonStyle: ButtonStyle {
     func makeBody(configuration: Configuration) -> some View {
         configuration.label.opacity(configuration.isPressed ? 0.65 : 1)
+    }
+}
+
+private struct NSDuoRemovalConfirmationView: View {
+    let game: NSDuoLibraryGame
+    let isBusy: Bool
+    let onConfirm: () -> Void
+    @Environment(\.dismiss) private var dismiss
+    var body: some View {
+        NavigationStack {
+            ScrollView {
+                VStack(spacing: 20) {
+                    Text(game.title).font(.title3.bold()).multilineTextAlignment(.center)
+                    Text("持续按住下方按钮 5 秒即可移除，松手或移出按钮会取消。游戏存档和“文件”中的源文件会保留。")
+                        .foregroundStyle(.secondary).multilineTextAlignment(.center)
+                    if isBusy { ProgressView("游戏库正在更新，请稍候…") }
+                    NSDuoHoldToRemoveButton(isEnabled: !isBusy) {
+                        onConfirm()
+                        dismiss()
+                    }
+                    .frame(height: 64)
+                    Button("取消移除", role: .cancel) { dismiss() }
+                }
+                .padding(24)
+                .frame(maxWidth: .infinity)
+            }
+            .navigationTitle("移除游戏")
+            .navigationBarTitleDisplayMode(.inline)
+        }
+        .presentationDetents([.medium, .large])
     }
 }

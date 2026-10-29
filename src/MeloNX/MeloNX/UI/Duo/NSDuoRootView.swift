@@ -61,6 +61,7 @@ struct NSDuoRootView: View {
             core.isRunning = .stopped
         }
         .onChange(of: scenePhase) { phase in
+            NSDuoDiagnostics.recordEnvironment()
             if phase == .active {
                 if initialized, !showPreparation, !NSDuoLibraryStore.shared.isBusy {
                     switch core.isRunning {

@@ -22,53 +22,50 @@ namespace Ryujinx.Library
         private long _lastCursorMoveTime;
 
         public bool[] PressedButtons { get; }
-        public Vector2[] CurrentPosition => _activeTouches.Values.ToArray();
+        public Vector2[] CurrentPosition => GetTouchPoints().Select(point => point.Position).ToArray();
+        public (int Id, Vector2 Position)[] GetTouchPoints()
+        {
+            lock (TouchLock) return _activeTouches.OrderBy(pair => pair.Key).Select(pair => (pair.Key, pair.Value)).ToArray();
+        }
         public Vector2 Scroll { get; private set; }
         public Size ClientSize;
 
-        private static Dictionary<int, Vector2> _activeTouches = new();
+        private static readonly object TouchLock = new();
+        private static readonly Dictionary<int, Vector2> _activeTouches = new();
 
         public NativeTouchDriver(HideCursorMode hideCursorMode)
         {
             PressedButtons = new bool[(int)MouseButton.Count];
             _hideCursorMode = hideCursorMode;
+            lock (TouchLock) _activeTouches.Clear();
         }
 
         [UnmanagedCallersOnly(EntryPoint = "touch_began")]
         public static void TouchBeganAtPoint(float x, float y, int index)
         {
             Vector2 position = new Vector2(x, y);
-            _activeTouches[index] = position;
+            if ((uint)index >= 16) return;
+            lock (TouchLock) _activeTouches[index] = position;
         }
 
 
         [UnmanagedCallersOnly(EntryPoint = "touch_moved")]
         public static void TouchMovedAtPoint(float x, float y, int index)
         {
-            if (_activeTouches.ContainsKey(index))
+            lock (TouchLock)
             {
-                _activeTouches[index] = new Vector2(x, y);
+                if (_activeTouches.ContainsKey(index)) _activeTouches[index] = new Vector2(x, y);
             }
         }
 
         [UnmanagedCallersOnly(EntryPoint = "touch_ended")]
         public static void TouchEndedForIndex(int index)
         {
-            if (_activeTouches.ContainsKey(index))
-            {
-                _activeTouches.Remove(index);
-            }
+            lock (TouchLock) _activeTouches.Remove(index);
         }
 
         public void UpdatePosition()
         {
-            if (_activeTouches.Count > 0)
-            {
-                var touch = _activeTouches.Values.GetEnumerator();
-                touch.MoveNext(); 
-                Vector2 position = touch.Current;
-            }
-
             CheckIdle();
         }
 
@@ -108,11 +105,7 @@ namespace Ryujinx.Library
 
         public bool IsAnyPressed(MouseButton button)
         {
-            if (_activeTouches.Count > 0)
-            {
-                return true;
-            }
-            return false;
+            lock (TouchLock) return _activeTouches.Count > 0;
         }
 
         public Size GetClientSize()
@@ -148,6 +141,7 @@ namespace Ryujinx.Library
                 return;
             }
             _isDisposed = true;
+            lock (TouchLock) _activeTouches.Clear();
         }
     }
 }

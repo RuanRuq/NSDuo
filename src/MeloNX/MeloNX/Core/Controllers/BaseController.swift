@@ -36,6 +36,7 @@ class BaseController: Equatable, Identifiable {
     let filterAlpha: Float = 0.05
     
     private var rumbleController: RumbleController?
+    let motionSession = ControllerMotionSession()
     var motionManager = CMMotionManager()
     
     var inputQueue: DispatchQueue
@@ -80,12 +81,6 @@ class BaseController: Equatable, Identifiable {
     }
     
     public func setupController() {
-        // Motion setup is usually low frequency, async is fine here
-        inputQueue.async { [weak self] in
-            guard let self = self else { return }
-            self.setupMotion()
-        }
-        
         setupHaptics()
     }
     
@@ -109,48 +104,9 @@ class BaseController: Equatable, Identifiable {
         Ryujinx.setGamepadButtonState(self.pointer, buttonId: button.rawValue, pressed: state == 1)
     }
     
-    private let rumbleCallback: @convention(c) (
-        UnsafeRawPointer?,
-        UnsafeMutableRawPointer?
-    ) -> Void = { dataPtr, userData in
-        
-        guard let userData else { return }
-        
-        let instance = Unmanaged<BaseController>
-            .fromOpaque(userData)
-            .takeUnretainedValue()
-        
-        guard let dataPtr else { return }
-        
-        let callbackData = dataPtr.load(as: CallbackData.self)
-        guard let rumbleData = RumbleData(callbackData: callbackData) else { return }
-        
-        instance.rumbleController?.rumble(data: rumbleData)
-    }
-    
-    func cool() {
-        let userData = Unmanaged.passUnretained(self).toOpaque()
-        
-        RegisterCallback(
-            "rumble-\(self.id)",
-            rumbleCallback,
-            userData
-        )
-    }
-    
     func setupHaptics() {
         DispatchQueue.main.async { [weak self] in
-            guard let self = self else { return }
-            
-            let registerRumbleCallback = {
-                let userData = Unmanaged.passUnretained(self).toOpaque()
-                
-                RegisterCallback(
-                    "rumble-\(self.id)",
-                    self.rumbleCallback,
-                    userData
-                )
-            }
+            guard let self = self, self.isActive else { return }
             
             if let nativeController = self.nativeController,
                !self.usesDeviceHandlers,
@@ -197,18 +153,31 @@ class BaseController: Equatable, Identifiable {
                 )
             }
             
-            registerRumbleCallback()
+            let core = RyujinxController.shared
+            self.rumbleController?.setActive(core.isRunning.isRunning() && !core.isPaused && !core.isStopping)
+            CallbackManager.register(name: "rumble-\(self.id)") { [weak rumble = self.rumbleController] data in
+                guard let value = RumbleData(callbackData: data) else { return }
+                rumble?.rumble(data: value)
+            }
         }
+    }
+
+    func setRumbleActive(_ active: Bool) {
+        rumbleController?.setActive(active)
     }
     
     func cleanup() {
         guard markInactive() else { return }
         
-        let callbackName = "rumble-\(self.id)"
-        callbackName.withCString { UnregisterCallback($0) }
-        
-        stopMotion()
-        rumbleController = nil
+        // Creation, pause and teardown share the main thread. The native
+        // callback only holds a weak reference to the queue-confined rumble driver.
+        DispatchQueue.main.async { [self] in
+            CallbackManager.unregister(name: "rumble-\(self.id)")
+            rumbleController?.setActive(false)
+            rumbleController = nil
+        }
+
+        setMotionActive(false)
         
         let pointer = self.pointer
 

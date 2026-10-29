@@ -74,7 +74,6 @@ final class NSDuoLibraryStore: ObservableObject {
     private var isPreparingLaunch = false
     @Published var message: String?
     @Published private(set) var folderWarnings: [UUID: String] = [:]
-    @Published var cachedLaunchURL: URL?
     var isChoosingFiles = false
 
     var isBusy: Bool { isLoading || isRemoving || isRenaming || isCheckingFolders || isPreparingLaunch || importProgress != nil }
@@ -84,6 +83,8 @@ final class NSDuoLibraryStore: ObservableObject {
     private var wantsFolderCheck = false
     private var cancelledFolderCheck = false
     private var coverAttempts: [UUID: String] = [:]
+    private var scheduledFolderCheck: Task<Void, Never>?
+    private var lastAutomaticFolderCheck: ContinuousClock.Instant?
 
     private init() {}
 
@@ -114,6 +115,7 @@ final class NSDuoLibraryStore: ObservableObject {
             message = "请选择 XCI、NSP 或 NSZ 游戏文件。"
             return
         }
+        cancelScheduledFolderCheck()
         importStandaloneGame(from: source)
     }
 
@@ -121,6 +123,7 @@ final class NSDuoLibraryStore: ObservableObject {
     // handing its URL to the emulator. Never scan while a game owns the key set.
     func importFolder(from source: URL) {
         guard isReady, !isBusy else { return }
+        cancelScheduledFolderCheck()
         Ryujinx.reloadKeySet()
         isCheckingFolders = true
         Task { [self] in
@@ -132,51 +135,68 @@ final class NSDuoLibraryStore: ObservableObject {
 
     func checkFolders() {
         guard isReady else { wantsFolderCheck = true; return }
-        guard !isBusy, !isChoosingFiles, cachedLaunchURL == nil, message == nil else { return }
-        guard !games.isEmpty else { return }
-        Ryujinx.reloadKeySet()
-        isCheckingFolders = true
-        cancelledFolderCheck = false
-        Task { [self] in
+        guard !isBusy, !isChoosingFiles, message == nil, !games.isEmpty else { return }
+        if let lastAutomaticFolderCheck, lastAutomaticFolderCheck.duration(to: .now) < .seconds(10) { return }
+        scheduledFolderCheck?.cancel()
+        // Coalesce view-appearance/foreground callbacks. A quick launch cancels
+        // this batch and checks only the selected game's folder instead.
+        scheduledFolderCheck = Task { [weak self] in
+            do { try await Task.sleep(for: .milliseconds(300)) } catch { return }
+            guard let self, !Task.isCancelled, !isBusy, !isChoosingFiles,
+                  message == nil else { return }
+            scheduledFolderCheck = nil
+            switch RyujinxController.shared.isRunning {
+            case .stopped, .crashed: break
+            case .started: return // A delayed check must never race JIT handoff/emulation.
+            }
+            Ryujinx.reloadKeySet()
+            isCheckingFolders = true
+            cancelledFolderCheck = false
             defer { isCheckingFolders = false }
+            var succeeded = true
             for game in games where game.folder != nil {
-                guard !cancelledFolderCheck else { break }
+                guard !cancelledFolderCheck else { succeeded = false; break }
                 do {
                     let source = try NSDuoFolderIO.resolve(game.folder!)
-                    _ = await scanFolder(source, previous: game, reportError: false)
-                } catch { folderWarnings[game.id] = error.localizedDescription }
+                    if !(await scanFolder(source, previous: game, reportError: false)) { succeeded = false }
+                } catch {
+                    folderWarnings[game.id] = error.localizedDescription
+                    succeeded = false
+                }
             }
             if !cancelledFolderCheck { await refreshCovers() }
+            if succeeded { lastAutomaticFolderCheck = .now }
         }
+    }
+
+    private func cancelScheduledFolderCheck() {
+        scheduledFolderCheck?.cancel()
+        scheduledFolderCheck = nil
     }
 
     func prepareForLaunch(_ game: NSDuoLibraryGame, onReady: @escaping (URL) -> Void) {
         guard isReady, !isBusy, let root = libraryURL else { return }
-        cachedLaunchURL = nil
+        cancelScheduledFolderCheck()
+        cancelledFolderCheck = false
         isPreparingLaunch = true
         Task { [self] in
             defer { isPreparingLaunch = false }
-            var warning: String?
             if let folder = game.folder {
                 Ryujinx.reloadKeySet()
                 do {
                     let source = try NSDuoFolderIO.resolve(folder)
-                    let success = await scanFolder(source, previous: game, reportError: false)
-                    if !success {
-                        warning = folderWarnings[game.id] ?? "检查已取消。"
-                    }
-                } catch { warning = error.localizedDescription }
+                    _ = await scanFolder(source, previous: game, reportError: false)
+                } catch { folderWarnings[game.id] = error.localizedDescription }
             }
+            // Source scans discover new content; validated app-owned copies remain
+            // playable when the original folder is missing or temporarily unavailable.
+            // An explicit cancel still cancels this launch, rather than starting a game.
+            guard !cancelledFolderCheck else { return }
             guard let current = games.first(where: { $0.id == game.id }), let url = url(for: current) else { return }
             do {
                 try NSDuoFolderIO.configure(current, root: root)
-                if let warning {
-                    cachedLaunchURL = url
-                    message = "未能检查文件夹的新内容：\(warning)\n可以先使用上次成功导入的版本。若目录已移动，请重新添加该游戏文件夹。"
-                } else {
-                    isPreparingLaunch = false
-                    onReady(url)
-                }
+                isPreparingLaunch = false
+                onReady(url)
             } catch { message = "附加内容准备失败：\(error.localizedDescription)" }
         }
     }

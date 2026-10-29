@@ -6,6 +6,8 @@ namespace Ryujinx.Graphics.GAL.Multithreading
 {
     class SyncMap : IDisposable
     {
+        private readonly RendererFaultState _fault;
+        public SyncMap(RendererFaultState fault) => _fault = fault;
         private readonly HashSet<ulong> _inFlight = [];
         private readonly AutoResetEvent _inFlightChanged = new(false);
 
@@ -35,6 +37,7 @@ namespace Ryujinx.Graphics.GAL.Multithreading
 
             while (true)
             {
+                _fault.ThrowIfFaulted();
                 lock (_inFlight)
                 {
                     if (!_inFlight.Contains(id))
@@ -43,7 +46,7 @@ namespace Ryujinx.Graphics.GAL.Multithreading
                     }
                 }
 
-                _inFlightChanged.WaitOne();
+                _fault.Wait(_inFlightChanged);
                 signal = true;
             }
 

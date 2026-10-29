@@ -7,8 +7,8 @@
 
 import Foundation
 
-struct RumbleData {
-    struct VibrationValue {
+nonisolated struct RumbleData: Sendable {
+    struct VibrationValue: Sendable {
         var amplitudeLow: Float
         var frequencyLow: Float
         var amplitudeHigh: Float

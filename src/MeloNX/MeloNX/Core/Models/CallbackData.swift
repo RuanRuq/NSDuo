@@ -7,7 +7,7 @@
 
 import Foundation
 
-final class CallbackBox {
+nonisolated final class CallbackBox {
     let body: (CallbackData) -> Void
     init(_ body: @escaping (CallbackData) -> Void) { self.body = body }
 }

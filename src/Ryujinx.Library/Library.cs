@@ -1,4 +1,5 @@
 using CommandLine;
+using Ryujinx.Common;
 using LibHac.Tools.FsSystem;
 using Ryujinx.Audio.Backends.SDL3;
 using Ryujinx.Audio.Backends.Apple;
@@ -109,15 +110,21 @@ namespace Ryujinx.Library
             {
                 Options managed = OptionsNativeHelper.FromNative(nativeOptions);
                 OptionsNativeHelper.Free(nativeOptions);
+                GameDiagnostics.Start(Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.MyDocuments), "Diagnostics"),
+                    Path.GetFileName(managed.InputPath),
+                    () => $"core={ReleaseInformation.Version}; os={Environment.OSVersion.VersionString}; model={managed.DeviceModel}; resolution={managed.ResScale}; backend={managed.GraphicsBackend}; threading={managed.BackendThreading}; shader_cache={!managed.DisableShaderCache}; async_shader={managed.EnableAsyncShaderCompilation}; texture_recompression={managed.EnableTextureRecompression}");
+                lock (inputConfigurationLock) { GameDiagnostics.Pause(_pauseRequested); }
                 Load(managed);
             }
             catch (Exception e)
             {
+                GameDiagnostics.Problem($"managed_exception: {e}");
                 Console.WriteLine(e.ToString());
                 return -1;
             }
             finally
             {
+                GameDiagnostics.End();
                 // Preserve requests made before the new emulation thread entered
                 // this function; consume them only after this run has fully ended.
                 Volatile.Write(ref _stopRequested, 0);
@@ -205,6 +212,7 @@ namespace Ryujinx.Library
         [UnmanagedCallersOnly(EntryPoint = "stop_emulation")]
         public static void StopEmulation()
         {
+            GameDiagnostics.Phase("stopping");
             Volatile.Write(ref _stopRequested, 1);
             Volatile.Read(ref _window)?.RequestExit();
         }
@@ -226,8 +234,20 @@ namespace Ryujinx.Library
                 // Preserve requests made during loading. Guest locks are entered
                 // by the emulation owner, never synchronously by the UIKit caller.
                 _pauseRequested = shouldPause;
+                GameDiagnostics.Pause(shouldPause);
                 _window?.RequestPause(shouldPause);
             }
+        }
+
+        [UnmanagedCallersOnly(EntryPoint = "nsduo_diagnostics_mark")]
+        public static void MarkDiagnosticProblem() => GameDiagnostics.Problem("User marked a problem near this time; inspect preceding events.");
+
+        [UnmanagedCallersOnly(EntryPoint = "nsduo_diagnostics_environment")]
+        public static void DiagnosticEnvironment(int thermalState, int lowPower, int appState, int memoryWarning)
+        {
+            // Numeric platform state only. No paths, account identifiers or arbitrary payloads.
+            GameDiagnostics.Event($"platform: thermal={thermalState}; low_power={lowPower}; app_state={appState}; memory_warning={memoryWarning}");
+            if (memoryWarning != 0) GameDiagnostics.Problem("iOS memory warning");
         }
 
         [UnmanagedCallersOnly(EntryPoint = "load_keyset")]
@@ -902,7 +922,12 @@ namespace Ryujinx.Library
                 if (window is MoltenVKWindow mvulkanWindow)
                     return new VulkanRenderer(api,
                         (instance, vk) => new SurfaceKHR((ulong)(mvulkanWindow.CreateWindowSurface(instance.Handle))),
-                        mvulkanWindow.GetRequiredInstanceExtensions, preferredGpuId);
+                        mvulkanWindow.GetRequiredInstanceExtensions, preferredGpuId,
+                        // Title ID becomes available during game loading, before renderer initialization.
+                        () => GraphicsConfig.EnableShaderCache && GraphicsConfig.TitleId != null
+                            ? Path.Combine(AppDataManager.GamesDirPath, GraphicsConfig.TitleId.ToLowerInvariant(),
+                                "cache", "shader", "vulkan-pipeline.cache")
+                            : null);
             }
 
             return new OpenGLRenderer();
@@ -971,8 +996,10 @@ namespace Ryujinx.Library
             _emulationContext.Gpu.ShaderCacheStateChanged += ProgressHandler;
         }
         
-        private static void ProgressHandler<T>(T state, int current, int total) where T : Enum
+        private static unsafe void ProgressHandler<T>(T state, int current, int total) where T : Enum
         {
+            const string callbackName = "ProgressWithPTCorShaderCache";
+            if (!CallbackRegistry.HasCallback(callbackName)) return;
             string jsonData = state switch
             {
                 LoadState => $"[\"PTC\",{current},{total}]",
@@ -981,17 +1008,9 @@ namespace Ryujinx.Library
             };
             
             byte[] jsonBytes = Encoding.UTF8.GetBytes(jsonData);
-            nint unmanagedPointer = Marshal.AllocHGlobal(jsonBytes.Length);
-
-            try
+            fixed (byte* pointer = jsonBytes)
             {
-                Marshal.Copy(jsonBytes, 0, unmanagedPointer, jsonBytes.Length);
-                
-                CallbackRegistry.Invoke("ProgressWithPTCorShaderCache", unmanagedPointer, (int)jsonBytes.Length);
-            }
-            finally
-            {
-                Marshal.FreeHGlobal(unmanagedPointer);
+                CallbackRegistry.Invoke(callbackName, pointer, jsonBytes.Length);
             }
         }
         
@@ -1141,6 +1160,8 @@ namespace Ryujinx.Library
                 }
 
                 SetupProgressHandler();
+                GameDiagnostics.Title(_emulationContext.Processes.ActiveApplication.Name, _emulationContext.Processes.ActiveApplication.DisplayVersion);
+                GameDiagnostics.Event($"title_id={GraphicsConfig.TitleId}; firmware={firmwareVersion?.VersionString}");
                 // Even a loading-time exit must run GPU initialization after the
                 // guest has started: guest threads may already wait for GPU readiness.
                 // Execute observes ExitRequested and skips the interactive loop.

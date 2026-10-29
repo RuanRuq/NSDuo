@@ -4,6 +4,7 @@ namespace Ryujinx.HLE.HOS.Services.Hid
 {
     public struct TouchPoint
     {
+        public uint FingerId;
         public TouchAttribute Attribute;
         public uint X;
         public uint Y;
