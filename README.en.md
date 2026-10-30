@@ -18,11 +18,7 @@ Its purpose is not to play cracked games, distribute pirated content or facilita
 
 ## Use with an AI Agent in one sentence
 
-Copy this instruction to an agent with local filesystem and terminal access:
-
-> Clone https://github.com/RuanRuq/NSDuo into a separate directory, read README.en.md and the licenses, install dependencies only inside the project, check build prerequisites, then build and install NS Duo using the developer team, unique bundle ID and device identifier I provide; ask for missing inputs, do not change other projects or global settings, do not download games, keys or firmware, never upload signing or pairing material, and distinguish verified results from untested behavior.
-
-This starts assisted setup; it does not replace device permission prompts, developer sign-in, valid pairing or user-supplied game material. No agent configuration, conversations or working-session records are included.
+> Clone https://github.com/RuanRuq/NSDuo and follow README.en.md to build and install it on my iPhone; ask me for any missing details.
 
 ## What makes NS Duo convenient
 
