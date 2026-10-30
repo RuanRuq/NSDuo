@@ -9,7 +9,7 @@ namespace PipelineDriverChecks
     enum Result { Success, Error, Incomplete }
     enum StructureType { PipelineCacheCreateInfo }
     struct PipelineCache { public int Handle; }
-    unsafe struct PipelineCacheCreateInfo { public StructureType SType; public nuint InitialDataSize; public void* PInitialData; }
+    unsafe struct PipelineCacheCreateInfo { public StructureType SType; public uint Flags; public nuint InitialDataSize; public void* PInitialData; }
     enum LogClass { Gpu }
     sealed class LogSink { public void PrintMsg(LogClass kind, string text) { } }
     static class Logger { public static LogSink Info = new(); public static LogSink Warning = new(); }
@@ -26,6 +26,7 @@ namespace PipelineDriverChecks
         public int Reads;
         public unsafe Result CreatePipelineCache(int device, in PipelineCacheCreateInfo info, void* allocator, out PipelineCache cache)
         {
+            if (info.Flags != 0) throw new Exception("parallel programs require an internally synchronized driver cache");
             Creates++;
             cache = default;
             if (info.InitialDataSize != 0)
@@ -52,7 +53,7 @@ namespace PipelineDriverChecks
         readonly int _device;
         readonly PipelineCacheStorage _pipelineCacheStorage;
         readonly PipelineHolder _pipeline = new();
-        readonly object PipelineCreationLock = new();
+        readonly object _pipelineCacheSnapshotLock = new();
         long _pipelineCompileCount = 1;
         long _pipelineCompileTicks;
         long _pipelineWaitTicks;

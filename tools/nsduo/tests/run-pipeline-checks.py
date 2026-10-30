@@ -30,7 +30,7 @@ sources.append(OUT / 'PipelineDriverMethods.cs')
 source = (ROOT / 'src/Ryujinx.Graphics.Vulkan/PipelineState.cs').read_text()
 methods = []
 for kind, key in [('Compute', 'SpecializationData'), ('Graphics', 'Internal')]:
-    start = source.index('lock (gd.PipelineCreationLock)', source.index('Create' + kind + 'Pipeline('))
+    start = source.index('lock (', source.index('Create' + kind + 'Pipeline('))
     opening = source.index('{', start)
     end = opening + 1
     depth = 1
@@ -43,7 +43,7 @@ for kind, key in [('Compute', 'SpecializationData'), ('Graphics', 'Internal')]:
         Pipeline pipelineHandle = default; CreateInfo pipelineCreateInfo = default;
         bool throwOnError = false, cachePipelineFailure = false;
         Result result = Result.Success;
-        // All requests saw a miss before waiting for the shared creation lock.
+        // All requests saw a miss before entering the production creation block.
         if (program.TryGet{kind}Pipeline(ref {key}, out pipeline)) return pipeline;
         if (!barrier.SignalAndWait(3000)) throw new Exception("request barrier timed out");
         {'Internal ^= 1024; // Emulate a temporary Metal integer-blend workaround; the cache key must stay original.' if kind == 'Graphics' else ''}

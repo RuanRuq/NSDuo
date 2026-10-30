@@ -100,7 +100,7 @@ namespace Ryujinx.Graphics.Vulkan
 
                     if (_gd != null)
                     {
-                        lock (_gd.PipelineCreationLock)
+                        lock (_gd.ShaderModuleLock)
                         {
                             _api.CreateShaderModule(_device, in shaderModuleCreateInfo, null, out _module).ThrowOnError();
                         }
@@ -208,7 +208,7 @@ namespace Ryujinx.Graphics.Vulkan
                 {
                     if (_gd != null)
                     {
-                        lock (_gd.PipelineCreationLock)
+                        lock (_gd.ShaderModuleLock)
                         {
                             _api.DestroyShaderModule(_device, _module, null);
                         }

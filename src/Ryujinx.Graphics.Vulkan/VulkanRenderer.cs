@@ -54,7 +54,8 @@ namespace Ryujinx.Graphics.Vulkan
         internal Queue BackgroundQueue { get; private set; }
         internal Lock BackgroundQueueLock { get; private set; }
         internal Lock QueueLock { get; private set; }
-        internal Lock PipelineCreationLock { get; private set; }
+        internal Lock ShaderModuleLock { get; private set; }
+        private readonly Lock _pipelineCacheSnapshotLock = new();
         private readonly Func<string> _pipelineCachePathProvider;
         private PipelineCacheStorage _pipelineCacheStorage;
         private long _pipelineCompileCount;
@@ -536,7 +537,7 @@ namespace Ryujinx.Graphics.Vulkan
             Api.GetDeviceQueue(_device, queueFamilyIndex, 0, out Queue queue);
             Queue = queue;
             QueueLock = new();
-            PipelineCreationLock = new();
+            ShaderModuleLock = new();
             BackgroundCompilationScheduler = new();
 
             LoadFeatures(maxQueueCount, queueFamilyIndex);
@@ -1095,6 +1096,9 @@ namespace Ryujinx.Graphics.Vulkan
                 PipelineCacheCreateInfo info = new()
                 {
                     SType = StructureType.PipelineCacheCreateInfo,
+                    // Vulkan internally synchronizes this cache across programs.
+                    // Do not opt into EXTERNALLY_SYNCHRONIZED without a cache-wide gate.
+                    Flags = 0,
                     InitialDataSize = (nuint)data.Length,
                     PInitialData = bytes,
                 };
@@ -1145,7 +1149,7 @@ namespace Ryujinx.Graphics.Vulkan
 
             // Called after all compiler workers finish, before the pipeline/device are disposed.
             // Serializing only at shutdown avoids introducing a new mid-game hitch.
-            lock (PipelineCreationLock)
+            lock (_pipelineCacheSnapshotLock)
             {
                 nuint size = 0;
                 Result result = Api.GetPipelineCacheData(_device, _pipeline.PipelineCache, ref size, null);

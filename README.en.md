@@ -16,6 +16,21 @@ Its purpose is not to play cracked games, distribute pirated content or facilita
 
 **Users must obtain XCI, NSP and NSZ game files themselves through lawful means and ensure they have the rights required to use them.** This project does not supply these files. Required keys, firmware and other materials must also be lawfully provided by the user.
 
+## What makes NS Duo convenient
+
+NS Duo aims to simplify everyday use to: **choose a game folder once, then tap its cover to play.**
+
+| When you want to… | How NS Duo helps |
+| --- | --- |
+| Play again | Keep library entries, local copies and cover art instead of selecting files every time. Rename games and use hold-to-remove protection. |
+| Organize updates and DLC | Discover arbitrarily named subfolders, match content IDs automatically, and check for additions while the source folder remains accessible. |
+| Prepare a session | Use the bundled local VPN and JIT helper from two buttons inside the same app, reducing switches between separate apps. Initial pairing may still require a computer. |
+| Use the Duo display | Keep the game centered above bottom-mounted touch controls in expanded portrait, use the full game area in landscape, and browse a cover grid. |
+| Avoid repeating compilation work | Reuse shaders and compatible driver pipeline caches, reduce compilation waits between unrelated programs, and preserve resolution and rendering quality. First-time content may still stutter. |
+| Investigate a gameplay issue | Collect diagnostics locally during normal play, then mark, export or clear records when needed, without keeping a computer connected for log capture. |
+
+These additions focus on everyday workflow and the mobile experience. Compatibility still depends on the emulation core, game and OS; universal compatibility and 60 FPS are not promised.
+
 ## Features
 
 - **Folder import:** XCI, NSP and NSZ, including recursively nested folders with arbitrary names.
@@ -24,9 +39,9 @@ Its purpose is not to play cracked games, distribute pirated content or facilita
 - **Automatic cover art:** extract embedded game icons and cache thumbnails, including for existing library entries; show a controller placeholder when no icon is available.
 - **NSZ conversion:** stream-decompress to a cached NSP on first import, with progress and cancellation, without modifying the source.
 - **In-app preparation:** bundled local tunnel and separate JIT helper extensions, exposed as **Connect VPN** and **Enable JIT**, without switching between separate apps.
-- **Duo layout:** approximately 60% game / 40% virtual controller in expanded portrait; full game area in landscape with an external controller. Compact pause/library controls at the top right, and subtle haptics on buttons other than sticks.
+- **Duo layout:** the bottom 35% is the virtual controller in expanded portrait. The game viewport fits within 50% of the screen height and is centered in the remaining upper 65%, splitting the extra 15% of black space evenly above and below. Landscape uses the full game area with an external controller. Compact pause/library controls stay at the top right, and buttons other than sticks have subtle haptics.
 - **Simplified Chinese game language by default**, subject to game support.
-- **Shader and driver pipeline caching:** reuse encountered shaders and save driver pipeline caches on orderly shutdown for later launches. Cache validation checks device/driver compatibility, and concurrent duplicate compilation is coalesced without reducing resolution or skipping draws. First-time content may still stutter.
+- **Shader and driver pipeline caching:** reuse encountered shaders and save driver pipeline caches on orderly shutdown for later launches. Cache validation checks device/driver compatibility. Creation is coordinated per shader program to coalesce duplicate requests and reduce blocking by unrelated background compilation, without reducing resolution or skipping draws. First-time content may still stutter.
 - **Local diagnostics:** automatically record loading, compilation, frame intervals and device state during normal play. Mark issues, export records or clear logs; nothing is uploaded automatically.
 
 ## Usage
@@ -141,6 +156,7 @@ flowchart TD
 - JIT uses OS developer services and private extension interfaces. It is not a permanent permission and needs revalidation after OS changes.
 - Shader preloading can only use collected shaders; it cannot discover every shader a game will need before first play.
 - No general save-state/full-process resume support. Multiplayer, universal compatibility and measured performance gains are not promised.
+- There is no universal 60 FPS unlock. Games that natively support 60 FPS still depend on available performance; 30 FPS games may need patches matching their exact version. Changing display refresh rate or VSync does not guarantee normal-speed 60 FPS gameplay.
 - The language switch applies to repository documentation. The customized app interface is primarily Chinese, not fully bilingual.
 
 ## Use with an AI Agent in one sentence

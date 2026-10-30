@@ -55,10 +55,13 @@ python3 tools/nsduo/tests/run-pipeline-checks.py
 - 驱动管线缓存跨会话复用，校验设备、驱动、系统及缓存 UUID；损坏、截断、超限缓存不会交给驱动；保存失败保留上一份有效缓存。
 - 提取 `VulkanRenderer` 的实际缓存读写方法，验证驱动拒绝缓存时改建空缓存、真正的设备错误仍会抛出、不完整快照不能覆盖有效缓存。
 - 提取 `PipelineState` 的实际编译临界区，验证同时未命中的请求只编译一次，不同状态分别编译，暂时失败可以重试，以及 Metal 混合状态修正不改变缓存键。
+- 阻塞一个程序的驱动编译调用，确认另一个程序的计算与图形管线仍能完成创建；同一程序继续去重。驱动缓存保留 Vulkan 内部同步，缓存导出只在停止编译后进行。
 
 原生 Vulkan 调用使用替身。此检查验证缓存与并发行为，不证明真机帧率或卡顿已经消失。新增驱动缓存只在正常结束游戏时保存，下次启动自动读取；它补充原有中间着色器缓存，不预编译从未遇到过的全部游戏内容，也不改变分辨率或跳过绘制。编译耗时超过 100 ms 时会限频记录 `Slow pipeline creation`，结束时记录累计编译和等待时间。
 
 These host checks exercise persistent driver-cache validation and the production cache/compilation methods with fake Vulkan calls. They cover corrupt data, identity changes, rejected caches, incomplete snapshots, concurrent misses and retryable failures. Driver caches are saved on orderly game shutdown and restored on the next launch; unseen content can still require first-use compilation. No resolution or draw-skipping setting is changed. Device performance still requires measurement.
+
+The contention regression holds one program inside a fake driver call and requires another program's graphics/compute creation to finish before releasing it. Production creation gates are scoped to each shader program, retaining duplicate-request protection. The shared driver cache keeps Vulkan's internal synchronization; snapshot export happens after compiler workers finish. The test verifies progress and correctness, not a device FPS improvement. Different states of the same program may still wait, as can driver-internal work and first-use compilation.
 
 ## 本地诊断检查 / Local diagnostic checks
 

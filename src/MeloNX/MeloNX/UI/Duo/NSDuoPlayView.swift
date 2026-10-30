@@ -12,7 +12,9 @@ struct NSDuoPlayView: View {
     var body: some View {
         GeometryReader { geometry in
             let portrait = geometry.size.height > geometry.size.width
-            let gameHeight = portrait ? geometry.size.height * 0.6 : geometry.size.height
+            let gameHeight = portrait ? geometry.size.height * 0.5 : geometry.size.height
+            let gamepadHeight = portrait ? geometry.size.height * 0.35 : 0
+            let gameAreaHeight = max(0, geometry.size.height - gamepadHeight)
             let viewport = CGSize(width: geometry.size.width, height: gameHeight)
             let renderSize = targetSize(in: viewport, aspectRatio: core.currentSettings.aspectRatio)
             VStack(spacing: 0) {
@@ -32,7 +34,8 @@ struct NSDuoPlayView: View {
                         .allowsHitTesting(false)
                     }
                 }
-                .frame(width: viewport.width, height: viewport.height)
+                // Center the unchanged game viewport in all space above the gamepad.
+                .frame(width: viewport.width, height: gameAreaHeight)
                 .clipped()
                 .overlay(alignment: .topTrailing) {
                     NSDuoPlayControls(alwaysVisible: portrait || core.isPaused || confirmExit,
@@ -54,7 +57,7 @@ struct NSDuoPlayView: View {
                         .padding(.horizontal, 8)
                         .disabled(core.isPaused || stopping || confirmExit)
                         .padding(.bottom, geometry.safeAreaInsets.bottom)
-                        .frame(width: geometry.size.width, height: geometry.size.height - gameHeight)
+                        .frame(width: geometry.size.width, height: gamepadHeight)
                         .background(Color(red: 0.075, green: 0.085, blue: 0.11))
                 }
             }

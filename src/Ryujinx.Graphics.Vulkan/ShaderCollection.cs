@@ -72,6 +72,9 @@ namespace Ryujinx.Graphics.Vulkan
         private bool _firstBackgroundUse;
         private readonly object _initializeLock;
         private readonly object _pipelineCacheLock;
+        // Recheck and publish misses under a program-local gate. An unrelated
+        // background program must not hold up a pipeline needed by the draw thread.
+        internal readonly Lock PipelineCreationLock = new();
         private bool _disposed;
         private bool _failLinkOnBackgroundPipelineFailure;
 

@@ -395,7 +395,7 @@ namespace Ryujinx.Graphics.Vulkan
                 Result result = Result.Success;
                 long requested = Stopwatch.GetTimestamp();
 
-                lock (gd.PipelineCreationLock)
+                lock (program.PipelineCreationLock)
                 {
                     // Another compiler may have filled this entry while we waited for the driver.
                     // Publish before releasing the same lock, so queued requests reuse that work.
@@ -708,7 +708,7 @@ namespace Ryujinx.Graphics.Vulkan
                 Result result = Result.Success;
                 long requested = Stopwatch.GetTimestamp();
 
-                lock (gd.PipelineCreationLock)
+                lock (program.PipelineCreationLock)
                 {
                     if (!program.TryGetGraphicsPipeline(ref cacheKey, out pipeline))
                     {
