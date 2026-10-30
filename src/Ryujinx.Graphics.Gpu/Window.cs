@@ -211,7 +211,7 @@ namespace Ryujinx.Graphics.Gpu
 
                 Image.Texture texture = pt.Cache.FindOrCreateTexture(null, TextureSearchFlags.WithUpscale, pt.Info, 0, range: pt.Range);
 
-                pt.Cache.Tick();
+                pt.Cache.Tick(texture);
 
                 texture.SynchronizeMemory();
 

@@ -116,9 +116,9 @@ namespace Ryujinx.Graphics.Vulkan
 
             for (int i = 0; i < shaders.Length; i++)
             {
-                Shader shader = compileInBackground
-                    ? new Shader(gd, device, shaders[i], compileAsync: true, highPriorityBackgroundCompilation)
-                    : new Shader(gd.Api, device, shaders[i]);
+                // Scheduling is independent of whether incomplete draws may be skipped.
+                // The default mode still waits for IsLinked, but uses the same bounded workers.
+                Shader shader = new(gd, device, shaders[i], compileAsync: true, highPriorityBackgroundCompilation);
 
                 stages |= 1u << shader.StageFlags switch
                 {

@@ -8,6 +8,7 @@ namespace Ryujinx.Common.Logging.Targets
         private readonly DefaultLogFormatter _formatter;
 
         private readonly string _name;
+        private readonly ConsoleRepeatFilter _repeatFilter = new();
 
         string ILogTarget.Name { get => _name; }
 
@@ -30,8 +31,12 @@ namespace Ryujinx.Common.Logging.Targets
 
         public void Log(object sender, LogEventArgs args)
         {
-            if (OperatingSystem.IsIOS())    
+            if (OperatingSystem.IsIOS())
+            {
+                if (!_repeatFilter.Accept(args, out int suppressed)) return;
+                if (suppressed > 0) Console.WriteLine($"[Console] Previous message repeated {suppressed} additional times.");
                 Console.WriteLine(_formatter.Format(args));
+            }
             else
             {
                 Console.ForegroundColor = GetLogColor(args.Level);

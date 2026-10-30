@@ -374,11 +374,15 @@ namespace Ryujinx.Library
             {
                 throw new InvalidDataException("NCZ 区段目录在读取期间发生变化。");
             }
-            using IncrementalHash hash = IncrementalHash.CreateHash(HashAlgorithmName.SHA256);
+            string contentId = entry.OutputName.Split('.')[0];
+            bool verifyContentId = !ticketless && contentId.Length == 32 && contentId.All(Uri.IsHexDigit);
+            // Ticketless repacks deliberately skip content-ID validation. Keep the
+            // complete NSP hash, but do not also hash each NCA when its result is unused.
+            using IncrementalHash hash = verifyContentId ? IncrementalHash.CreateHash(HashAlgorithmName.SHA256) : null;
             source.Position = entry.Offset;
             source.ReadExactly(buffer.AsSpan(0, NcaHeaderSize));
             destination.Write(buffer.AsSpan(0, NcaHeaderSize));
-            hash.AppendData(buffer, 0, NcaHeaderSize);
+            hash?.AppendData(buffer, 0, NcaHeaderSize);
             source.Position = metadata.PayloadOffset;
             using LimitedReadStream compressed = new(source, metadata.PayloadSize);
             using Stream payload = metadata.BlockSizes == null
@@ -404,10 +408,8 @@ namespace Ryujinx.Library
             // because repacked NCA headers may differ while retaining the content
             // ID. The container/section/block lengths and zstd stream are still
             // validated above in both modes.
-            string contentId = entry.OutputName.Split('.')[0];
-            byte[] digest = hash.GetHashAndReset();
-            if (!ticketless && contentId.Length == 32 && contentId.All(Uri.IsHexDigit) &&
-                !Convert.ToHexString(digest.AsSpan(0, 16)).Equals(contentId, StringComparison.OrdinalIgnoreCase))
+            if (verifyContentId &&
+                !Convert.ToHexString(hash.GetHashAndReset().AsSpan(0, 16)).Equals(contentId, StringComparison.OrdinalIgnoreCase))
             {
                 throw new InvalidDataException($"NCZ 条目 {entry.Name} 的内容校验失败，无法导入。");
             }

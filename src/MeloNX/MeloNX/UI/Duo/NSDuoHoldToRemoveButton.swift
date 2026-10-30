@@ -25,7 +25,12 @@ final class NSDuoHoldRemovalControl: UIControl {
     private var previousSize = CGSize.zero
     private var hapticEngine: CHHapticEngine?
     private var hapticPlayer: CHHapticPatternPlayer?
-    private lazy var feedback = UIImpactFeedbackGenerator(style: .light, view: self)
+    private lazy var feedback: UIImpactFeedbackGenerator = {
+        if #available(iOS 17.5, *) {
+            return UIImpactFeedbackGenerator(style: .light, view: self)
+        }
+        return UIImpactFeedbackGenerator(style: .light)
+    }()
     private var lastPulse: TimeInterval = 0
 
     override var isEnabled: Bool {
@@ -136,8 +141,12 @@ final class NSDuoHoldRemovalControl: UIControl {
             isUserInteractionEnabled = false
             onConfirm?()
         } else if hapticPlayer == nil, now - lastPulse >= 0.22 {
-            // Same view-bound light feedback as the virtual gamepad; quiet fallback.
-            feedback.impactOccurred(intensity: confirmation.hapticIntensity, at: CGPoint(x: bounds.midX, y: bounds.midY))
+            // Match the virtual gamepad's quiet fallback on each supported OS.
+            if #available(iOS 17.5, *) {
+                feedback.impactOccurred(intensity: confirmation.hapticIntensity, at: CGPoint(x: bounds.midX, y: bounds.midY))
+            } else {
+                feedback.impactOccurred(intensity: confirmation.hapticIntensity)
+            }
             feedback.prepare()
             lastPulse = now
         }

@@ -71,33 +71,11 @@ struct DLCManagerSheet: View {
     }
     
     private var emptyStateView: some View {
-        Group {
-            if #available(iOS 17, *) {
-                ContentUnavailableView(
-                    "No DLCs Found",
-                    systemImage: "puzzlepiece.extension",
-                    description: Text("Tap the + button to add game DLCs.")
-                )
-            } else {
-                VStack(spacing: 20) {
-                    Spacer()
-                    Image(systemName: "puzzlepiece.extension")
-                        .font(.system(size: 64))
-                        .foregroundColor(.secondary)
-                    Text("No DLCs Found")
-                        .font(.title2)
-                        .fontWeight(.semibold)
-                    Text("Tap the + button to add game DLCs.")
-                        .font(.subheadline)
-                        .foregroundColor(.secondary)
-                        .multilineTextAlignment(.center)
-                        .padding(.horizontal)
-                    Spacer()
-                }
-                .frame(maxWidth: .infinity)
-                .listRowInsets(EdgeInsets())
-            }
-        }
+        ContentUnavailableView(
+            "No DLCs Found",
+            systemImage: "puzzlepiece.extension",
+            description: Text("Tap the + button to add game DLCs.")
+        )
     }
     
     private func dlcRow(_ dlc: DLCItem) -> some View {

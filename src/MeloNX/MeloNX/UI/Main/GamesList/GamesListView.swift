@@ -181,37 +181,11 @@ struct GamesListView: View {
     }
     
     private var emptyStateView: some View {
-        Group {
-            if #available(iOS 17, *) {
-                ContentUnavailableView(
-                    "No Games Found",
-                    systemImage: "square.and.arrow.down",
-                    description: Text("Tap the + button to add legally dumped ROMs!")
-                )
-            } else {
-                VStack(spacing: 20) {
-                    Spacer()
-                    
-                    Image(systemName: "square.and.arrow.down")
-                        .font(.system(size: 64))
-                        .foregroundColor(.secondary)
-                    
-                    Text("No Games Found")
-                        .font(.title2)
-                        .fontWeight(.semibold)
-                    
-                    Text("Tap the + button to add legally dumped ROMs!")
-                        .font(.subheadline)
-                        .foregroundColor(.secondary)
-                        .multilineTextAlignment(.center)
-                        .padding(.horizontal)
-                    
-                    Spacer()
-                }
-                .frame(maxWidth: .infinity)
-                .listRowInsets(EdgeInsets())
-            }
-        }
+        ContentUnavailableView(
+            "No Games Found",
+            systemImage: "square.and.arrow.down",
+            description: Text("Tap the + button to add legally dumped ROMs!")
+        )
     }
     
     

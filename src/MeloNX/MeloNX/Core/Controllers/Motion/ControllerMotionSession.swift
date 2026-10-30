@@ -1,5 +1,17 @@
 import Foundation
 
+nonisolated enum NSDuoMotionPreferences {
+    static func isEnabled(titleID: String, defaults: UserDefaults = .standard) -> Bool {
+        defaults.object(forKey: key(titleID)) as? Bool ?? true
+    }
+
+    static func setEnabled(_ enabled: Bool, titleID: String, defaults: UserDefaults = .standard) {
+        defaults.set(enabled, forKey: key(titleID))
+    }
+
+    private static func key(_ titleID: String) -> String { "NSDuo.motion." + titleID.lowercased() }
+}
+
 // A queued sample belongs to one activation only. Disabling waits for any
 // in-flight native submission, then rejects all samples from that generation.
 nonisolated final class ControllerMotionSession: @unchecked Sendable {

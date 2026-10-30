@@ -6,6 +6,7 @@ using Ryujinx.Cpu.LightningJit.Cache;
 using Ryujinx.Cpu.LightningJit.CodeGen.Arm64;
 using Ryujinx.Cpu.LightningJit.State;
 using Ryujinx.Cpu.Signal;
+using Ryujinx.Common.Logging;
 using System;
 using System.Collections.Concurrent;
 using System.Collections.Generic;
@@ -41,6 +42,8 @@ namespace Ryujinx.Cpu.LightningJit
         private readonly ConcurrentQueue<KeyValuePair<ulong, TranslatedFunction>> _oldFuncs;
         private readonly NoWxCache _noWxCache;
         private readonly DualMappedNoWxCache _dualMappedNoWxCache;
+        private readonly CompilationCoordinator _compilationCoordinator = new();
+        private readonly CompilationCoordinator.CompileFunction _compileFunction;
         private bool _disposed;
 
         internal TranslatorCache<TranslatedFunction> Functions { get; }
@@ -51,6 +54,7 @@ namespace Ryujinx.Cpu.LightningJit
         public Translator(IMemoryManager memory, AddressTable<ulong> functionTable)
         {
             Memory = memory;
+            _compileFunction = CompileCore;
 
             _oldFuncs = new ConcurrentQueue<KeyValuePair<ulong, TranslatedFunction>>();
 
@@ -182,11 +186,26 @@ namespace Ryujinx.Cpu.LightningJit
 
         private CompiledFunction Compile(ulong address, ExecutionMode mode)
         {
+            // Keep iOS/W^X compilation independent until sharing is validated
+            // against its native, per-thread mapping lifecycle.
+            if (IsNoWxPlatform)
+            {
+                return CompileCore(address, mode);
+            }
+
+            return _compilationCoordinator.Compile(address, mode, _compileFunction);
+        }
+
+        private CompiledFunction CompileCore(ulong address, ExecutionMode mode)
+        {
             return AarchCompiler.Compile(CpuPresets.CortexA57, Memory, address, FunctionTable, Stubs.DispatchStub, mode, RuntimeInformation.ProcessArchitecture);
         }
 
         public void InvalidateJitCacheRegion(ulong address, ulong size)
         {
+            // A single range can intersect any in-progress decode. Conservatively
+            // reject all old-generation compilation results, not only start keys.
+            _compilationCoordinator.Invalidate();
             ulong[] overlapAddresses = [];
 
             int overlapsCount = Functions.GetOverlaps(address, size, ref overlapAddresses);
@@ -235,6 +254,11 @@ namespace Ryujinx.Cpu.LightningJit
             {
                 if (disposing)
                 {
+                    _compilationCoordinator.Dispose();
+                    var compilation = _compilationCoordinator.GetStatistics();
+                    Logger.Info?.Print(LogClass.Cpu,
+                        $"JIT compile sharing: compiled={compilation.Compiled}, merged={compilation.Merged}, " +
+                        $"invalidationRetries={compilation.Retries}, sharedCopies={compilation.Copies}, reentrantBypasses={compilation.Reentrant}");
                     if (_noWxCache != null)
                     {
                         _noWxCache.Dispose();

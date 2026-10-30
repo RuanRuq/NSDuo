@@ -17,6 +17,9 @@ namespace Ryujinx.Audio.Backends.SDL3
         private readonly SDL3HardwareDeviceDriver _driver;
         private readonly ConcurrentQueue<SDL3AudioBuffer> _queuedBuffers;
         private readonly DynamicRingBuffer _ringBuffer;
+        // Publish PCM and its completion record as one transaction. Never call
+        // SDL while holding this lock: SDL invokes Update under its stream lock.
+        private readonly Lock _bufferLock = new();
         private ulong _playedSampleCount;
         private readonly ManualResetEvent _updateRequiredEvent;
         private SDL_AudioStream* _outputStream;
@@ -91,36 +94,62 @@ namespace Ryujinx.Audio.Backends.SDL3
 
             streamSpan.Clear();
 
-            int maxFrameCount = (int)GetSampleCount(additionalAmount);
-            int bufferedFrames = _ringBuffer.Length / _bytesPerFrame;
-
-            int frameCount = Math.Min(bufferedFrames, maxFrameCount);
-            int byteCount = frameCount * _bytesPerFrame;
-
-            if (frameCount > 0)
+            float volume = _driver.Volume * _volume;
+            bool needUpdate;
+            // Unit gain needs no mixing or intermediate copy. For other gains,
+            // keep SDL's format-specific scaling/clipping behavior unchanged.
+            // Float mixing also defines clipping/NaN behavior, even at unit gain.
+            if (volume == 1f && RequestedSampleFormat != SampleFormat.PcmFloat)
             {
-                using SpanOwner<byte> samplesOwner = SpanOwner<byte>.Rent(byteCount);
-                Span<byte> samples = samplesOwner.Span;
-
-                _ringBuffer.Read(samples, 0, byteCount);
-
-                fixed (byte* pStreamDst = streamSpan)
-                fixed (byte* pStreamSrc = samples)
+                ReadSamples(streamSpan, out needUpdate);
+            }
+            else
+            {
+                using SpanOwner<byte> samplesOwner = SpanOwner<byte>.Rent(additionalAmount);
+                int byteCount = ReadSamples(samplesOwner.Span, out needUpdate);
+                if (byteCount > 0)
                 {
-                    // Apply volume to written data
-                    SDL_MixAudio(pStreamDst, pStreamSrc, _nativeSampleFormat, (uint)byteCount, _driver.Volume * _volume);
+                    fixed (byte* pStreamDst = streamSpan)
+                    fixed (byte* pStreamSrc = samplesOwner.Span)
+                    {
+                        SDL_MixAudio(pStreamDst, pStreamSrc, _nativeSampleFormat, (uint)byteCount, volume);
+                    }
+                }
+            }
+
+            if (needUpdate)
+            {
+                _updateRequiredEvent.Set();
+            }
+
+            fixed (byte* pStreamDst = streamSpan)
+            {
+                SDL_PutAudioStreamData(streamDevice, (nint)pStreamDst, additionalAmount);
+            }
+        }
+
+        private int ReadSamples(Span<byte> destination, out bool needUpdate)
+        {
+            lock (_bufferLock)
+            {
+                int maxFrameCount = (int)GetSampleCount(destination.Length);
+                int bufferedFrames = _ringBuffer.Length / _bytesPerFrame;
+                int frameCount = Math.Min(bufferedFrames, maxFrameCount);
+                int byteCount = frameCount * _bytesPerFrame;
+                if (byteCount > 0)
+                {
+                    _ringBuffer.Read(destination, 0, byteCount);
                 }
 
-                ulong availaibleSampleCount = GetSampleCount(byteCount);
-                bool needUpdate = false;
-
-                while (availaibleSampleCount > 0 && _queuedBuffers.TryPeek(out SDL3AudioBuffer driverBuffer))
+                needUpdate = false;
+                ulong availableSampleCount = GetSampleCount(byteCount);
+                while (availableSampleCount > 0 && _queuedBuffers.TryPeek(out SDL3AudioBuffer driverBuffer))
                 {
                     ulong sampleStillNeeded = driverBuffer.SampleCount - Interlocked.Read(ref driverBuffer.SamplePlayed);
-                    ulong playedAudioBufferSampleCount = Math.Min(sampleStillNeeded, availaibleSampleCount);
+                    ulong playedAudioBufferSampleCount = Math.Min(sampleStillNeeded, availableSampleCount);
 
                     ulong currentSamplePlayed = Interlocked.Add(ref driverBuffer.SamplePlayed, playedAudioBufferSampleCount);
-                    availaibleSampleCount -= playedAudioBufferSampleCount;
+                    availableSampleCount -= playedAudioBufferSampleCount;
 
                     if (currentSamplePlayed == driverBuffer.SampleCount)
                     {
@@ -131,15 +160,7 @@ namespace Ryujinx.Audio.Backends.SDL3
                     Interlocked.Add(ref _playedSampleCount, playedAudioBufferSampleCount);
                 }
 
-                if (needUpdate)
-                {
-                    _updateRequiredEvent.Set();
-                }
-            }
-            
-            fixed (byte* pStreamDst = streamSpan)
-            {
-                SDL_PutAudioStreamData(streamDevice, (nint)pStreamDst, additionalAmount);
+                return byteCount;
             }
         }
 
@@ -163,9 +184,11 @@ namespace Ryujinx.Audio.Backends.SDL3
             {
                 SDL3AudioBuffer driverBuffer = new(buffer.DataPointer, GetSampleCount(buffer));
 
-                _ringBuffer.Write(buffer.Data, 0, buffer.Data.Length);
-
-                _queuedBuffers.Enqueue(driverBuffer);
+                lock (_bufferLock)
+                {
+                    _ringBuffer.Write(buffer.Data, 0, buffer.Data.Length);
+                    _queuedBuffers.Enqueue(driverBuffer);
+                }
             }
             else
             {
@@ -210,12 +233,15 @@ namespace Ryujinx.Audio.Backends.SDL3
 
         public override bool WasBufferFullyConsumed(AudioBuffer buffer)
         {
-            if (!_queuedBuffers.TryPeek(out SDL3AudioBuffer driverBuffer))
+            lock (_bufferLock)
             {
-                return true;
-            }
+                if (!_queuedBuffers.TryPeek(out SDL3AudioBuffer driverBuffer))
+                {
+                    return true;
+                }
 
-            return driverBuffer.DriverIdentifier != buffer.DataPointer;
+                return driverBuffer.DriverIdentifier != buffer.DataPointer;
+            }
         }
 
         private void Dispose(bool disposing)

@@ -7,11 +7,13 @@ nonisolated struct NSDuoFolderRecord: Codable, Sendable {
     var bookmark: Data
     let applicationID: String
     var files: [NSDuoFolderFile]
+    var ignoredFiles: [NSDuoIgnoredFolderFile]? = nil
 
     var isValid: Bool {
         !bookmark.isEmpty && applicationID.count == 16
             && applicationID.allSatisfy { "0123456789abcdef".contains($0) }
             && files.allSatisfy(\.isValid)
+            && (ignoredFiles ?? []).allSatisfy { !$0.sourcePath.isEmpty && $0.sourceBytes >= 0 }
     }
 
     var selection: NSDuoContentSelection { NSDuoContentSelection(applicationID: applicationID, files: files) }
@@ -20,6 +22,14 @@ nonisolated struct NSDuoFolderRecord: Codable, Sendable {
         let update = selected.update.map { "更新 \($0.content.displayVersion ?? String($0.content.version))" } ?? "本体"
         return "\(update) · \(selected.dlc.count) 个 DLC"
     }
+}
+
+// Only source fingerprints are retained for unrelated content: no app-owned file
+// reference and no activation metadata. Old manifests omit this optional field.
+nonisolated struct NSDuoIgnoredFolderFile: Codable, Sendable {
+    let sourcePath: String
+    let sourceBytes: Int64
+    let sourceModified: Date?
 }
 
 nonisolated struct NSDuoFolderFile: Codable, Sendable {
@@ -91,8 +101,27 @@ nonisolated enum NSDuoFolderIO {
         }
         let sourceFiles = try enumerate(source, operation: operation)
         guard !sourceFiles.isEmpty else { throw LibraryError.message("这个目录及其子目录中没有 XCI、NSP 或 NSZ 文件。") }
+        // Re-linking an already known directory should reuse its successful import.
+        // Canonical paths handle /var aliases; each file still gets size/date checks.
+        let sourcePath = source.resolvingSymlinksInPath().standardizedFileURL.path
+        let previous = previous ?? existing.first { game in
+            guard let folder = game.folder, let url = try? resolve(folder) else { return false }
+            guard url.resolvingSymlinksInPath().standardizedFileURL.path == sourcePath else { return false }
+            // Manual re-selection may point at an entirely different game now.
+            // Reuse a provenance record only while its original base is unchanged;
+            // otherwise retain the ordinary new-import behavior and ID matching.
+            return folder.files.contains { file in
+                guard file.contents.contains(where: { $0.kind == "application" }),
+                      let oldDate = file.sourceModified,
+                      let values = try? source.appendingPathComponent(file.sourcePath).resourceValues(forKeys: [.fileSizeKey, .contentModificationDateKey]) else { return false }
+                return values.fileSize.map(Int64.init) == file.sourceBytes && values.contentModificationDate == oldDate
+            }
+        }
         var files = previous?.folder?.files ?? []
-        var contentsChanged = previous == nil
+        var ignored = previous?.folder?.ignoredFiles ?? []
+        let currentPaths = Set(sourceFiles.map { $0.0 })
+        ignored.removeAll { !currentPaths.contains($0.sourcePath) }
+        var contentsChanged = previous == nil || ignored.count != (previous?.folder?.ignoredFiles?.count ?? 0)
         var created = Set<URL>()
         var committed = false
         defer { if !committed { for file in created { try? manager.removeItem(at: file) } } }
@@ -100,6 +129,12 @@ nonisolated enum NSDuoFolderIO {
         for (relativeSource, url) in sourceFiles {
             try operation.checkCancellation()
             let values = try url.resourceValues(forKeys: [.fileSizeKey, .contentModificationDateKey])
+            if let old = ignored.first(where: { $0.sourcePath == relativeSource }),
+               let modified = values.contentModificationDate, old.sourceModified == modified,
+               old.sourceBytes == Int64(values.fileSize ?? -1) {
+                continue
+            }
+            ignored.removeAll { $0.sourcePath == relativeSource }
             if let old = files.first(where: { $0.sourcePath == relativeSource }),
                let modified = values.contentModificationDate, old.sourceModified == modified,
                old.sourceBytes == Int64(values.fileSize ?? -1),
@@ -135,8 +170,14 @@ nonisolated enum NSDuoFolderIO {
             throw LibraryError.message("目录中的游戏与原记录不一致，请通过“添加游戏文件夹”加入另一个游戏。")
         }
         // Unrelated content is never activated. Do not keep its large app-owned copy.
+        for file in files where !file.contents.contains(where: { $0.applicationID == applicationID }) {
+            ignored.removeAll { $0.sourcePath == file.sourcePath }
+            ignored.append(NSDuoIgnoredFolderFile(sourcePath: file.sourcePath, sourceBytes: file.sourceBytes,
+                                                  sourceModified: file.sourceModified))
+        }
         files = files.filter { $0.contents.contains { $0.applicationID == applicationID } }
-        let folder = NSDuoFolderRecord(bookmark: bookmark, applicationID: applicationID, files: files)
+        let folder = NSDuoFolderRecord(bookmark: bookmark, applicationID: applicationID, files: files,
+                                       ignoredFiles: ignored.isEmpty ? nil : ignored)
         guard let base = folder.selection.base else { throw LibraryError.message("无法识别本体。") }
         let prior = previous ?? existing.first { $0.folder?.applicationID == applicationID || $0.sha256 == base.file.sha256 }
         let title = prior?.title ?? URL(fileURLWithPath: base.file.sourcePath).deletingPathExtension().lastPathComponent
@@ -298,7 +339,7 @@ nonisolated enum NSDuoFolderIO {
                 throw LibraryError.message("附加内容副本丢失，请重新添加游戏文件夹。")
             }
         }
-        let gameDirectory = URL.documentsDirectory.appendingPathComponent("games/\(folder.applicationID)", isDirectory: true)
+        let gameDirectory = FileManager.default.urls(for: .documentDirectory, in: .userDomainMask)[0].appendingPathComponent("games/\(folder.applicationID)", isDirectory: true)
         try FileManager.default.createDirectory(at: gameDirectory, withIntermediateDirectories: true)
         let updatePath = selection.update.map { root.appendingPathComponent($0.file.relativePath).path } ?? ""
         let updateData = try JSONSerialization.data(withJSONObject: ["selected": updatePath, "paths": updatePath.isEmpty ? [] : [updatePath]])

@@ -1435,9 +1435,10 @@ namespace Ryujinx.Graphics.Gpu.Image
         /// <summary>
         /// Ticks periodic elements of the texture cache.
         /// </summary>
-        public void Tick()
+        public void Tick(Texture protectedTexture)
         {
-            _cache.ProcessShortCache();
+            _cache.ProcessShortCache(protectedTexture);
+            _cache.ProcessMemoryPressure(_context.TextureMemoryBudget.Latest, protectedTexture);
         }
 
         /// <summary>

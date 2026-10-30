@@ -1,14 +1,18 @@
 import Foundation
 import UIKit
+import os
 
 @_silgen_name("nsduo_diagnostics_mark")
 private func markDiagnosticProblem()
 @_silgen_name("nsduo_diagnostics_environment")
 private func recordDiagnosticEnvironment(_ thermal: Int32, _ lowPower: Int32, _ appState: Int32, _ memoryWarning: Int32)
+@_silgen_name("nsduo_memory_budget")
+private func recordMemoryBudget(_ availableBytes: UInt64, _ memoryWarning: Int32)
 
 enum NSDuoDiagnostics {
     static func markProblem() { markDiagnosticProblem() }
     static func recordEnvironment(memoryWarning: Bool = false) {
+        recordMemoryBudget(UInt64(os_proc_available_memory()), memoryWarning ? 1 : 0)
         recordDiagnosticEnvironment(Int32(ProcessInfo.processInfo.thermalState.rawValue),
                                     ProcessInfo.processInfo.isLowPowerModeEnabled ? 1 : 0,
                                     Int32(UIApplication.shared.applicationState.rawValue), memoryWarning ? 1 : 0)

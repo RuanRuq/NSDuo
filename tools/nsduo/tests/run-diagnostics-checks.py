@@ -6,7 +6,7 @@ import subprocess
 from xml.sax.saxutils import escape
 
 ROOT = Path(__file__).resolve().parents[3]
-OUT = ROOT / 'work/diagnostics-checks'
+OUT = Path(os.environ.get('NSDUO_DIAGNOSTIC_CHECK_OUT', str(ROOT / 'work/diagnostics-checks'))).resolve()
 OUT.mkdir(parents=True, exist_ok=True)
 sources = [ROOT / 'src/Ryujinx.Common/Logging/GameDiagnostics.cs',
            ROOT / 'src/Ryujinx.Common/ReleaseInformation.cs', Path(__file__).with_name('DiagnosticsChecks.cs')]
@@ -14,7 +14,7 @@ items = ''.join(f'<Compile Include="{escape(str(p))}" />' for p in sources)
 common = ROOT / 'src/Ryujinx.Common/bin/Release/net10.0/Ryujinx.Common.dll'
 items += f'<Reference Include="Ryujinx.Common"><HintPath>{escape(str(common))}</HintPath></Reference>'
 (OUT / 'Checks.csproj').write_text('<Project Sdk="Microsoft.NET.Sdk"><PropertyGroup>'
-    '<OutputType>Exe</OutputType><TargetFramework>net10.0</TargetFramework>'
+    '<OutputType>Exe</OutputType><UseAppHost>false</UseAppHost><TargetFramework>net10.0</TargetFramework>'
     '<EnableDefaultCompileItems>false</EnableDefaultCompileItems><EnableNETAnalyzers>false</EnableNETAnalyzers><NoWarn>CS0436</NoWarn>'
     '</PropertyGroup><ItemGroup>' + items + '</ItemGroup></Project>')
 (OUT / 'NuGet.Config').write_text('<configuration><packageSources><clear /></packageSources></configuration>')

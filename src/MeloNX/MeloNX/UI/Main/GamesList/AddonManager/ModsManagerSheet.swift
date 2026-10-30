@@ -98,39 +98,12 @@ struct ModsManagerSheet: View {
     }
     
     private var emptyStateView: some View {
-        Group {
-            if #available(iOS 17, *) {
-                ContentUnavailableView(
-                    "No Mods Found",
-                    systemImage: "arrow.down.circle",
-                    description: Text("Tap the + button to add game mods.")
-                )
-            } else {
-                VStack(spacing: 20) {
-                    Spacer()
-                    
-                    Image(systemName: "arrow.down.circle")
-                        .font(.system(size: 64))
-                        .foregroundColor(.secondary)
-                    
-                    Text("No Mods Found")
-                        .font(.title2)
-                        .fontWeight(.semibold)
-                    
-                    Text("Tap the + button to add game mods.")
-                        .font(.subheadline)
-                        .foregroundColor(.secondary)
-                        .multilineTextAlignment(.center)
-                        .padding(.horizontal)
-                    
-                    Spacer()
-                }
-                .frame(maxWidth: .infinity)
-                .listRowInsets(EdgeInsets())
-            }
-        }
+        ContentUnavailableView(
+            "No Mods Found",
+            systemImage: "arrow.down.circle",
+            description: Text("Tap the + button to add game mods.")
+        )
     }
-    
     
     private func updateRow(_ update: ModItem) -> some View {
         HStack {

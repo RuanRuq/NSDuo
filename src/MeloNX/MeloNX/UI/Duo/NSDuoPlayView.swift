@@ -37,7 +37,7 @@ struct NSDuoPlayView: View {
                 // Center the unchanged game viewport in all space above the gamepad.
                 .frame(width: viewport.width, height: gameAreaHeight)
                 .clipped()
-                .overlay(alignment: .topTrailing) {
+                .overlay(alignment: .topLeading) {
                     NSDuoPlayControls(alwaysVisible: portrait || core.isPaused || confirmExit,
                                       isPaused: core.isPaused, stopping: stopping,
                                       pause: {
@@ -50,7 +50,7 @@ struct NSDuoPlayView: View {
                         confirmExit = true
                     })
                     .padding(.top, geometry.safeAreaInsets.top + 8)
-                    .padding(.trailing, geometry.safeAreaInsets.trailing + 12)
+                    .padding(.leading, geometry.safeAreaInsets.leading + 12)
                 }
                 if portrait {
                     NSDuoGamepad()
@@ -114,7 +114,6 @@ struct NSDuoPlayView: View {
 // and the virtual gamepad underneath it.
 private struct NSDuoPlayControls: View {
     @ObservedObject private var menu = InGameConfigView_MenuView.shared
-    @State private var problemMarked = false
     let alwaysVisible: Bool
     let isPaused: Bool
     let stopping: Bool
@@ -127,17 +126,6 @@ private struct NSDuoPlayControls: View {
 
     private var controls: some View {
         HStack(spacing: 2) {
-            Button {
-                NSDuoDiagnostics.markProblem()
-                problemMarked = true
-            } label: {
-                Label(problemMarked ? "再次标记刚才的问题" : "标记刚才的问题", systemImage: problemMarked ? "flag.fill" : "flag")
-                    .labelStyle(.iconOnly)
-                    .frame(width: 44, height: 44)
-                    .contentShape(Rectangle())
-            }
-            .foregroundStyle(problemMarked ? .green : .white)
-            .accessibilityHint("保留本次运行的问题日志，可在游戏库的诊断日志中导出")
             Button(action: pause) {
                 Label(isPaused ? "继续游戏" : "暂停游戏", systemImage: isPaused ? "play.fill" : "pause.fill")
                     .labelStyle(.iconOnly)

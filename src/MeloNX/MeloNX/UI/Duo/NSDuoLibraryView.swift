@@ -62,6 +62,13 @@ struct NSDuoLibraryView: View {
                         ProgressView("正在读取游戏封面…").font(.footnote)
                     }
 
+                    if library.isPreparingLaunch && library.importProgress == nil {
+                        HStack {
+                            ProgressView("正在准备游戏…")
+                            Spacer()
+                            Button("取消") { library.cancelImport() }
+                        }
+                    }
                     if library.isLoading {
                         ProgressView("正在读取游戏库…")
                             .frame(maxWidth: .infinity)
@@ -114,7 +121,8 @@ struct NSDuoLibraryView: View {
                 }
             }
         }
-        .task { library.loadIfNeeded(); onLibraryAppear() }
+        .task { library.setCoverLoadingSuspended(false); library.loadIfNeeded(); onLibraryAppear() }
+        .onDisappear { library.setCoverLoadingSuspended(true); library.releaseCovers() }
         .sheet(isPresented: $showingDiagnostics) { NSDuoDiagnosticsView() }
         .onChange(of: showingImporter) { _, shown in library.isChoosingFiles = shown }
         .fileImporter(isPresented: $showingImporter,
@@ -203,7 +211,9 @@ struct NSDuoLibraryView: View {
             .contentShape(Rectangle())
         }
         .buttonStyle(NSDuoGameItemButtonStyle())
-        .disabled(library.isBusy)
+        .disabled(!library.canPrepareLaunch)
+        .onAppear { library.requestCover(for: game) }
+        .onDisappear { library.endCoverRequest(for: game) }
         .contextMenu {
             Button("重命名", systemImage: "pencil") {
                 renamedTitle = game.title

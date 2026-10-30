@@ -70,33 +70,11 @@ struct UpdateManagerSheet: View {
     }
     
     private var emptyStateView: some View {
-        Group {
-            if #available(iOS 17, *) {
-                ContentUnavailableView(
-                    "No Updates Found",
-                    systemImage: "arrow.down.circle",
-                    description: Text("Tap the + button to add game updates.")
-                )
-            } else {
-                VStack(spacing: 20) {
-                    Spacer()
-                    Image(systemName: "arrow.down.circle")
-                        .font(.system(size: 64))
-                        .foregroundColor(.secondary)
-                    Text("No Updates Found")
-                        .font(.title2)
-                        .fontWeight(.semibold)
-                    Text("Tap the + button to add game updates.")
-                        .font(.subheadline)
-                        .foregroundColor(.secondary)
-                        .multilineTextAlignment(.center)
-                        .padding(.horizontal)
-                    Spacer()
-                }
-                .frame(maxWidth: .infinity)
-                .listRowInsets(EdgeInsets())
-            }
-        }
+        ContentUnavailableView(
+            "No Updates Found",
+            systemImage: "arrow.down.circle",
+            description: Text("Tap the + button to add game updates.")
+        )
     }
     
     private func updateRow(_ update: UpdateItem) -> some View {

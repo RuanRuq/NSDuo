@@ -62,7 +62,17 @@ nonisolated struct NSDuoImportProgress: Sendable {
 final class NSDuoLibraryStore: ObservableObject {
     static let shared = NSDuoLibraryStore()
 
-    @Published private(set) var games: [NSDuoLibraryGame] = []
+    @Published private(set) var games: [NSDuoLibraryGame] = [] {
+        didSet {
+            let hashes = Dictionary(uniqueKeysWithValues: games.map { ($0.id, $0.sha256) })
+            for previous in oldValue where hashes[previous.id] != previous.sha256 {
+                covers[previous.id] = nil
+                coverAttempts[previous.id] = nil
+                coverBudget.remove(previous.id)
+                if hashes[previous.id] != nil && visibleCoverIDs.contains(previous.id) { pendingCoverIDs.insert(previous.id) }
+            }
+        }
+    }
     @Published private(set) var covers: [UUID: UIImage] = [:]
     @Published private(set) var isLoadingCovers = false
     @Published private(set) var importProgress: NSDuoImportProgress?
@@ -71,12 +81,19 @@ final class NSDuoLibraryStore: ObservableObject {
     @Published private(set) var isRemoving = false
     @Published private(set) var isRenaming = false
     @Published private(set) var isCheckingFolders = false
-    private var isPreparingLaunch = false
+    @Published private(set) var isPreparingLaunch = false
+    @Published private(set) var isAutomaticFolderCheck = false
     @Published var message: String?
     @Published private(set) var folderWarnings: [UUID: String] = [:]
     var isChoosingFiles = false
 
-    var isBusy: Bool { isLoading || isRemoving || isRenaming || isCheckingFolders || isPreparingLaunch || importProgress != nil }
+    var isBusy: Bool { isLoading || isRemoving || isRenaming || isCheckingFolders || isPreparingLaunch || isLoadingCovers || importProgress != nil }
+    // User launches can preempt background work, but never manual mutations.
+    var canPrepareLaunch: Bool {
+        isReady && !isLoading && !isRemoving && !isRenaming && !isChoosingFiles && !isPreparingLaunch
+            && (!isCheckingFolders || isAutomaticFolderCheck)
+            && (importProgress == nil || isAutomaticFolderCheck)
+    }
 
     private var libraryURL: URL?
     private var importOperation: NSDuoImportOperation?
@@ -84,28 +101,41 @@ final class NSDuoLibraryStore: ObservableObject {
     private var cancelledFolderCheck = false
     private var coverAttempts: [UUID: String] = [:]
     private var scheduledFolderCheck: Task<Void, Never>?
+    private var automaticFolderTask: Task<Void, Never>?
+    private var launchTask: Task<Void, Never>?
+    private var launchID: UUID?
+    private var coverTask: Task<Void, Never>?
+    private var visibleCoverIDs = Set<UUID>()
+    private var pendingCoverIDs = Set<UUID>()
+    private var coverLoadingSuspended = false
+    private var coverBudget = NSDuoCoverBudget()
+    private var memoryObserver: NSObjectProtocol?
     private var lastAutomaticFolderCheck: ContinuousClock.Instant?
 
-    private init() {}
+    private init() {
+        memoryObserver = NotificationCenter.default.addObserver(forName: UIApplication.didReceiveMemoryWarningNotification,
+            object: nil, queue: .main) { [weak self] _ in
+                Task { @MainActor [weak self] in self?.handleMemoryWarning() }
+            }
+    }
 
     func loadIfNeeded() {
         guard !isReady, !isBusy else { return }
         isLoading = true
         Task { [self] in
             do {
-                let loaded = try await Task.detached(priority: .utility) {
+                let loaded = try await NSDuoLibraryWorker.run {
                     try NSDuoLibraryIO.load()
-                }.value
+                }
                 libraryURL = loaded.root
                 games = loaded.games
-                covers = loaded.covers.compactMapValues { UIImage(data: $0) }
-                coverAttempts = Dictionary(uniqueKeysWithValues: loaded.games.filter { covers[$0.id] != nil }.map { ($0.id, $0.sha256) })
                 isReady = true
             } catch {
                 message = "无法读取游戏库：\(error.localizedDescription)"
             }
             isLoading = false
             if wantsFolderCheck { wantsFolderCheck = false; checkFolders() }
+            scheduleCoverLoads()
         }
     }
 
@@ -124,12 +154,10 @@ final class NSDuoLibraryStore: ObservableObject {
     func importFolder(from source: URL) {
         guard isReady, !isBusy else { return }
         cancelScheduledFolderCheck()
-        Ryujinx.reloadKeySet()
         isCheckingFolders = true
         Task { [self] in
-            defer { isCheckingFolders = false }
+            defer { isCheckingFolders = false; scheduleCoverLoads() }
             _ = await scanFolder(source, previous: nil, reportError: true)
-            await refreshCovers()
         }
     }
 
@@ -138,34 +166,36 @@ final class NSDuoLibraryStore: ObservableObject {
         guard !isBusy, !isChoosingFiles, message == nil, !games.isEmpty else { return }
         if let lastAutomaticFolderCheck, lastAutomaticFolderCheck.duration(to: .now) < .seconds(10) { return }
         scheduledFolderCheck?.cancel()
-        // Coalesce view-appearance/foreground callbacks. A quick launch cancels
-        // this batch and checks only the selected game's folder instead.
         scheduledFolderCheck = Task { [weak self] in
             do { try await Task.sleep(for: .milliseconds(300)) } catch { return }
-            guard let self, !Task.isCancelled, !isBusy, !isChoosingFiles,
-                  message == nil else { return }
+            guard let self, !Task.isCancelled else { return }
+            if isLoadingCovers { wantsFolderCheck = true; return }
+            guard !isBusy, !isChoosingFiles, message == nil else { return }
             scheduledFolderCheck = nil
             switch RyujinxController.shared.isRunning {
             case .stopped, .crashed: break
-            case .started: return // A delayed check must never race JIT handoff/emulation.
+            case .started: return
             }
-            Ryujinx.reloadKeySet()
             isCheckingFolders = true
+            isAutomaticFolderCheck = true
             cancelledFolderCheck = false
-            defer { isCheckingFolders = false }
-            var succeeded = true
-            for game in games where game.folder != nil {
-                guard !cancelledFolderCheck else { succeeded = false; break }
-                do {
-                    let source = try NSDuoFolderIO.resolve(game.folder!)
-                    if !(await scanFolder(source, previous: game, reportError: false)) { succeeded = false }
-                } catch {
-                    folderWarnings[game.id] = error.localizedDescription
-                    succeeded = false
+            automaticFolderTask = Task { [self] in
+                defer {
+                    self.automaticFolderTask = nil
+                    self.isAutomaticFolderCheck = false
+                    self.isCheckingFolders = false
+                    self.scheduleCoverLoads()
+                }
+                // Back off after failed attempts too (e.g. disconnected file providers).
+                self.lastAutomaticFolderCheck = .now
+                for game in self.games where game.folder != nil {
+                    guard !Task.isCancelled, !self.cancelledFolderCheck else { break }
+                    do {
+                        let source = try NSDuoFolderIO.resolve(game.folder!)
+                        _ = await self.scanFolder(source, previous: game, reportError: false)
+                    } catch { self.folderWarnings[game.id] = error.localizedDescription }
                 }
             }
-            if !cancelledFolderCheck { await refreshCovers() }
-            if succeeded { lastAutomaticFolderCheck = .now }
         }
     }
 
@@ -174,30 +204,102 @@ final class NSDuoLibraryStore: ObservableObject {
         scheduledFolderCheck = nil
     }
 
-    func prepareForLaunch(_ game: NSDuoLibraryGame, onReady: @escaping (URL) -> Void) {
-        guard isReady, !isBusy, let root = libraryURL else { return }
+    // Hold the busy state while cancelled workers unwind. Cancellation never lets
+    // a new keyset/metadata owner race a still-running coordinator or native call.
+    private func beginLaunch(_ work: @escaping @MainActor () async -> Void) {
+        guard canPrepareLaunch else { return }
         cancelScheduledFolderCheck()
-        cancelledFolderCheck = false
+        let automatic = automaticFolderTask
+        let cover = coverTask
+        automatic?.cancel()
+        cover?.cancel()
+        if automatic != nil { cancelledFolderCheck = true; _ = importOperation?.cancel() }
+        let id = UUID()
+        launchID = id
         isPreparingLaunch = true
-        Task { [self] in
-            defer { isPreparingLaunch = false }
-            if let folder = game.folder {
-                Ryujinx.reloadKeySet()
+        launchTask = Task { [self] in
+            defer { finishLaunch(id) }
+            await automatic?.value
+            await cover?.value
+            guard !Task.isCancelled else { return }
+            cancelledFolderCheck = false
+            await work()
+        }
+    }
+
+    private func finishLaunch(_ id: UUID) {
+        guard launchID == id else { return }
+        launchID = nil
+        launchTask = nil
+        isPreparingLaunch = false
+        scheduleCoverLoads()
+    }
+
+    func prepareForLaunch(_ game: NSDuoLibraryGame, onReady: @escaping (URL) -> Void) {
+        guard let root = libraryURL else { return }
+        beginLaunch { [self] in
+            // An automatic scan may have committed while cancellation was waiting.
+            guard let selected = games.first(where: { $0.id == game.id }) else { return }
+            if let folder = selected.folder {
                 do {
                     let source = try NSDuoFolderIO.resolve(folder)
-                    _ = await scanFolder(source, previous: game, reportError: false)
+                    _ = await scanFolder(source, previous: selected, reportError: false)
                 } catch { folderWarnings[game.id] = error.localizedDescription }
             }
-            // Source scans discover new content; validated app-owned copies remain
-            // playable when the original folder is missing or temporarily unavailable.
-            // An explicit cancel still cancels this launch, rather than starting a game.
-            guard !cancelledFolderCheck else { return }
-            guard let current = games.first(where: { $0.id == game.id }), let url = url(for: current) else { return }
+            guard !Task.isCancelled, !cancelledFolderCheck,
+                  let current = games.first(where: { $0.id == game.id }) else { return }
             do {
-                try NSDuoFolderIO.configure(current, root: root)
+                let url = try await NSDuoLibraryWorker.run {
+                    let url = try NSDuoLibraryIO.checkedURL(for: current, root: root)
+                    try NSDuoFolderIO.configure(current, root: root)
+                    return url
+                }
+                guard !Task.isCancelled else { return }
+                // The next synchronous callback either opens preparation or takes a
+                // new launch lease for metadata. An old defer cannot release it.
+                launchID = nil
+                launchTask = nil
                 isPreparingLaunch = false
                 onReady(url)
+                if !isPreparingLaunch { scheduleCoverLoads() }
             } catch { message = "附加内容准备失败：\(error.localizedDescription)" }
+        }
+    }
+
+    func refreshResourceReadiness(completion: @escaping (Bool) -> Void) {
+        beginLaunch { [self] in
+            let ready = (try? await NSDuoLibraryWorker.run { NSDuoLaunchMetadata.resourcesReady() }) ?? false
+            guard !Task.isCancelled else { return }
+            launchID = nil
+            launchTask = nil
+            isPreparingLaunch = false
+            completion(ready)
+            if !isPreparingLaunch { scheduleCoverLoads() }
+        }
+    }
+
+    func prepareLaunchMetadata(at url: URL, completion: @escaping (Result<GameInfo, Error>) -> Void) {
+        beginLaunch { [self] in
+            do {
+                let game = try await NSDuoLibraryWorker.run {
+                    guard let format = NSDuoGameFormat(url: url) else { throw LibraryError.message("游戏格式无效。") }
+                    guard NSDuoLaunchMetadata.resourcesReady() else { throw NSDuoLaunchMetadata.Failure.resourcesMissing }
+                    let handle = try FileHandle(forReadingFrom: url)
+                    defer { try? handle.close() }
+                    Ryujinx.reloadKeySet()
+                    let game = Ryujinx.getGameInfo(arg0: handle.fileDescriptor, arg1: format.rawValue as NSString, path: url)
+                    guard !game.titleId.isEmpty, game.titleId != "0000000000000000" else {
+                        throw LibraryError.message("未能识别可启动的游戏本体。请检查文件完整性、密钥与固件；更新包和 DLC 不能单独启动。")
+                    }
+                    return game
+                }
+                guard !Task.isCancelled else { return }
+                releaseCovers()
+                completion(.success(game))
+            } catch {
+                guard !Task.isCancelled else { return }
+                completion(.failure(error))
+            }
         }
     }
 
@@ -214,14 +316,16 @@ final class NSDuoLibraryStore: ObservableObject {
             importProgress = nil
         }
         do {
-            let updated = try await Task.detached(priority: .utility) { [self] in
-                try NSDuoFolderIO.scan(source: source, root: root, previous: previous, existing: existing, operation: operation) { update in
+            let updated = try await NSDuoLibraryWorker.run { [self] in
+                try operation.checkCancellation()
+                Ryujinx.reloadKeySet()
+                return try NSDuoFolderIO.scan(source: source, root: root, previous: previous, existing: existing, operation: operation) { update in
                     Task { @MainActor [weak self] in
                         guard let self, self.importOperation === operation, self.importProgress?.phase != .cancelling else { return }
                         self.importProgress = update
                     }
                 }
-            }.value
+            }
             games = updated
             if let previous { folderWarnings[previous.id] = nil }
             return true
@@ -239,15 +343,16 @@ final class NSDuoLibraryStore: ObservableObject {
         importOperation = operation
         importProgress = NSDuoImportProgress(fileName: source.lastPathComponent, copiedBytes: 0, totalBytes: 0, phase: .preparing)
         let existing = games
-        Ryujinx.reloadKeySet()
         Task { [self] in
             defer {
                 if scoped { source.stopAccessingSecurityScopedResource() }
                 importOperation = nil
                 importProgress = nil
+                scheduleCoverLoads()
             }
             do {
-                games = try await Task.detached(priority: .utility) { [self] in
+                games = try await NSDuoLibraryWorker.run { [self] in
+                    Ryujinx.reloadKeySet()
                     var created = Set<URL>()
                     var committed = false
                     defer { if !committed { for file in created { try? FileManager.default.removeItem(at: file) } } }
@@ -274,8 +379,8 @@ final class NSDuoLibraryStore: ObservableObject {
                     try NSDuoLibraryIO.save(updated, root: root)
                     committed = true
                     return updated
-                }.value
-                await refreshCovers()
+                }
+                scheduleCoverLoads()
             } catch {
                 if !operation.isCancelled { message = "导入失败：\(error.localizedDescription)" }
             }
@@ -283,31 +388,87 @@ final class NSDuoLibraryStore: ObservableObject {
     }
 
     func cancelImport() {
+        launchTask?.cancel()
+        automaticFolderTask?.cancel()
         cancelledFolderCheck = true
         if importOperation?.cancel() == true {
             importProgress?.phase = .cancelling
         }
     }
 
-    // Every caller already holds the library's busy state. This keeps native
-    // metadata reads off the main thread and prevents racing the emulation core.
-    private func refreshCovers() async {
+    func requestCover(for game: NSDuoLibraryGame) {
+        visibleCoverIDs.insert(game.id)
+        if covers[game.id] == nil { pendingCoverIDs.insert(game.id) }
+        coverBudget.touch(game.id)
+        scheduleCoverLoads()
+    }
+
+    func endCoverRequest(for game: NSDuoLibraryGame) {
+        visibleCoverIDs.remove(game.id)
+        pendingCoverIDs.remove(game.id)
+    }
+
+    func releaseCovers(keepingVisibleRequests: Bool = false) {
+        coverTask?.cancel()
+        if !keepingVisibleRequests { visibleCoverIDs.removeAll() }
+        pendingCoverIDs = visibleCoverIDs
+        covers.removeAll()
+        coverBudget.removeAll()
+    }
+
+    func setCoverLoadingSuspended(_ suspended: Bool) {
+        coverLoadingSuspended = suspended
+        if suspended { coverTask?.cancel() }
+        else { scheduleCoverLoads() }
+    }
+
+    private func handleMemoryWarning() {
+        releaseCovers(keepingVisibleRequests: true)
+        // Keep only a smaller working set after pressure; do not rehydrate the
+        // entire previous cache or lose the identity of still-visible cells.
+        coverBudget = NSDuoCoverBudget(limit: 8 * 1024 * 1024)
+        scheduleCoverLoads()
+    }
+
+    private func scheduleCoverLoads() {
+        guard isReady, !isBusy, !coverLoadingSuspended, coverTask == nil, !pendingCoverIDs.isEmpty else { return }
+        switch RyujinxController.shared.isRunning {
+        case .stopped, .crashed: break
+        case .started: return
+        }
         guard let root = libraryURL else { return }
         isLoadingCovers = true
-        defer { isLoadingCovers = false }
-        let currentIDs = Set(games.map(\.id))
-        covers = covers.filter { currentIDs.contains($0.key) }
-        coverAttempts = coverAttempts.filter { currentIDs.contains($0.key) }
-        for game in games {
-            guard !Task.isCancelled, importOperation?.isCancelled != true else { return }
-            guard coverAttempts[game.id] != game.sha256 else { continue }
-            let data = await Task.detached(priority: .utility) {
-                autoreleasepool { NSDuoCoverIO.load(for: game, root: root) }
-            }.value
-            covers[game.id] = data.flatMap { UIImage(data: $0) }
-            // Failed artwork is retried next session, without rescanning a large
-            // game file every time this library becomes visible in this session.
-            coverAttempts[game.id] = game.sha256
+        coverTask = Task { [self] in
+            defer {
+                coverTask = nil; isLoadingCovers = false
+                if Task.isCancelled {
+                    for game in games where visibleCoverIDs.contains(game.id) && covers[game.id] == nil {
+                        pendingCoverIDs.insert(game.id)
+                    }
+                }
+                if wantsFolderCheck { wantsFolderCheck = false; checkFolders() }
+                scheduleCoverLoads()
+            }
+            // Requests arriving during a read join this pass. Eviction itself never
+            // requeues an item, so a grid larger than the budget cannot spin.
+            while let id = pendingCoverIDs.first {
+                guard !Task.isCancelled else { break }
+                pendingCoverIDs.remove(id)
+                guard let game = games.first(where: { $0.id == id }),
+                      visibleCoverIDs.contains(game.id), covers[game.id] == nil,
+                      coverAttempts[game.id] != game.sha256 else { continue }
+                let prepared = try? await NSDuoLibraryWorker.run {
+                    autoreleasepool {
+                        Ryujinx.reloadKeySet()
+                        return NSDuoCoverIO.preparedImage(for: game, root: root)
+                    }
+                }
+                guard !Task.isCancelled, visibleCoverIDs.contains(game.id) else { continue }
+                if let prepared {
+                    for evicted in coverBudget.insert(game.id, cost: prepared.cost) { covers[evicted] = nil }
+                    if coverBudget.contains(game.id) { covers[game.id] = prepared.image }
+                } else { coverAttempts[game.id] = game.sha256 }
+            }
         }
     }
 
@@ -333,11 +494,11 @@ final class NSDuoLibraryStore: ObservableObject {
         let snapshot = updated
         isRenaming = true
         Task { [self] in
-            defer { isRenaming = false }
+            defer { isRenaming = false; scheduleCoverLoads() }
             do {
-                try await Task.detached(priority: .utility) {
+                try await NSDuoLibraryWorker.run {
                     try NSDuoLibraryIO.save(snapshot, root: root)
-                }.value
+                }
                 games = snapshot
             } catch {
                 message = "重命名失败：\(error.localizedDescription)"
@@ -351,9 +512,9 @@ final class NSDuoLibraryStore: ObservableObject {
         isRemoving = true
         Task { [self] in
             do {
-                let warning = try await Task.detached(priority: .utility) {
+                let warning = try await NSDuoLibraryWorker.run {
                     try NSDuoLibraryIO.remove(game, root: root, remaining: remaining)
-                }.value
+                }
                 games = remaining
                 covers[game.id] = nil
                 coverAttempts[game.id] = nil
@@ -363,12 +524,13 @@ final class NSDuoLibraryStore: ObservableObject {
                 message = "移除失败：\(error.localizedDescription)"
             }
             isRemoving = false
+            scheduleCoverLoads()
         }
     }
 }
 
 // Explicitly opt out of the target's default MainActor isolation. All multi-GB work
-// below is synchronous inside Task.detached, with a fixed maximum read buffer.
+// below is synchronous on the serial library worker, with a fixed maximum read buffer.
 nonisolated enum NSDuoLibraryIO {
     private struct Manifest: Codable {
         let version: Int
@@ -378,7 +540,6 @@ nonisolated enum NSDuoLibraryIO {
     struct Loaded: Sendable {
         let root: URL
         let games: [NSDuoLibraryGame]
-        let covers: [UUID: Data]
     }
 
     static func load() throws -> Loaded {
@@ -422,10 +583,7 @@ nonisolated enum NSDuoLibraryIO {
             }
         }
         NSDuoCoverIO.prune(keeping: games, root: root)
-        let covers = games.reduce(into: [UUID: Data]()) { result, game in
-            result[game.id] = NSDuoCoverIO.cachedData(for: game, root: root)
-        }
-        return Loaded(root: root, games: games, covers: covers)
+        return Loaded(root: root, games: games)
     }
 
     static func checkedURL(for game: NSDuoLibraryGame, root: URL) throws -> URL {
@@ -549,5 +707,28 @@ nonisolated final class NSDuoImportOperation: @unchecked Sendable {
         defer { lock.unlock() }
         if cancelled { throw LibraryError.cancelled }
         committing = true
+    }
+}
+
+// The single worker also covers launch parsing and artwork. Awaiting it never
+// blocks the UI thread and no background native metadata readers overlap.
+nonisolated enum NSDuoLibraryWorker {
+    private static let queue = DispatchQueue(label: "NSDuo.LibraryIO", qos: .userInitiated)
+    static func run<Value: Sendable>(_ operation: @escaping @Sendable () throws -> Value) async throws -> Value {
+        try await withCheckedThrowingContinuation { continuation in
+            queue.async { continuation.resume(with: Result { try operation() }) }
+        }
+    }
+}
+
+nonisolated enum NSDuoLaunchMetadata {
+    enum Failure: Error { case resourcesMissing }
+    static func resourcesReady() -> Bool {
+        let keys = FileManager.default.urls(for: .documentDirectory, in: .userDomainMask)[0]
+            .appendingPathComponent("system/prod.keys")
+        guard let text = try? String(contentsOf: keys, encoding: .utf8) else { return false }
+        let lines = text.components(separatedBy: .newlines).filter { !$0.isEmpty }
+        guard !lines.isEmpty, lines.allSatisfy({ $0.range(of: "^[a-z0-9_]+ = [a-z0-9]+$", options: .regularExpression) != nil }) else { return false }
+        return !Ryujinx.installedFirmwareVersion.isEmpty
     }
 }

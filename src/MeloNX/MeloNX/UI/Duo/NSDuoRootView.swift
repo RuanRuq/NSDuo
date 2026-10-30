@@ -33,12 +33,12 @@ struct NSDuoRootView: View {
             }
         }
         .sheet(isPresented: $showPreparation, onDismiss: {
-            preparedResources = resourcesReady
-            guard let url = pendingURL, preparedResources else { pendingURL = nil; return }
-            pendingURL = nil
-            play(url)
+            refreshReadiness(resumePending: true)
         }) {
             NSDuoPreparationView()
+        }
+        .onChange(of: showPreparation) { _, shown in
+            NSDuoLibraryStore.shared.setCoverLoadingSuspended(shown)
         }
         .alert("无法启动", isPresented: Binding(get: { failure != nil }, set: { if !$0 { failure = nil } })) {
             Button("知道了", role: .cancel) { failure = nil }
@@ -51,8 +51,8 @@ struct NSDuoRootView: View {
             MetalViewRepresentable.createView()
             UIApplication.shared.isIdleTimerDisabled = false
             AlertHandlers.register()
+            preparedResources = (try? await NSDuoLibraryWorker.run { NSDuoLaunchMetadata.resourcesReady() }) ?? false
             initialized = true
-            preparedResources = resourcesReady
             checkFolders()
         }
         .onChange(of: core.isRunning.hasCrashed()) { crashed in
@@ -65,7 +65,7 @@ struct NSDuoRootView: View {
             if phase == .active {
                 if initialized, !showPreparation, !NSDuoLibraryStore.shared.isBusy {
                     switch core.isRunning {
-                    case .stopped, .crashed: preparedResources = resourcesReady
+                    case .stopped, .crashed: refreshReadiness()
                     case .started: break
                     }
                 }
@@ -100,27 +100,31 @@ struct NSDuoRootView: View {
         NSDuoLibraryStore.shared.importGame(from: url)
     }
 
-    private var resourcesReady: Bool {
-        core.verifyKeysFile(path: .keysFolderURL, keys: .prod) && core.firmwareInstalled
+    private func refreshReadiness(resumePending: Bool = false) {
+        NSDuoLibraryStore.shared.refreshResourceReadiness { ready in
+            preparedResources = ready
+            if resumePending {
+                let url = pendingURL
+                pendingURL = nil
+                if let url, ready { play(url) }
+            }
+        }
     }
     private func play(_ url: URL) {
-        guard let format = NSDuoGameFormat(url: url), FileManager.default.isReadableFile(atPath: url.path) else {
-            failure = "游戏文件无法读取，请重新导入 XCI 或 NSP。"; return
-        }
-        preparedResources = resourcesReady
-        guard preparedResources else { pendingURL = url; showPreparation = true; return }
-        // Metadata parsing is deferred until keys are ready; the library works without keys.
-        do {
-            let handle = try FileHandle(forReadingFrom: url)
-            defer { try? handle.close() }
-            Ryujinx.reloadKeySet()
-            let game = Ryujinx.getGameInfo(arg0: handle.fileDescriptor, arg1: format.rawValue as NSString, path: url)
-            guard !game.titleId.isEmpty, game.titleId != "0000000000000000" else {
-                failure = "未能识别可启动的游戏本体。请检查文件完整性、密钥与固件；更新包和 DLC 不能单独启动。"; return
+        // The library keeps its launch lease until the native read finishes.
+        NSDuoLibraryStore.shared.prepareLaunchMetadata(at: url) { result in
+            switch result {
+            case .success(let game):
+                preparedResources = true
+                if NSDuoIntegratedJIT.shared.isReady { core.startGame(game) }
+                else { core.isRunning = .started(game: game, state: .noJIT) }
+            case .failure(NSDuoLaunchMetadata.Failure.resourcesMissing):
+                preparedResources = false
+                pendingURL = url
+                showPreparation = true
+            case .failure(let error): failure = error.localizedDescription
             }
-            if NSDuoIntegratedJIT.shared.isReady { core.startGame(game) }
-            else { core.isRunning = .started(game: game, state: .noJIT) }
-        } catch { failure = error.localizedDescription }
+        }
     }
 }
 

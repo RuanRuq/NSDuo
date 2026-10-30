@@ -125,6 +125,11 @@ namespace Ryujinx.Library
             finally
             {
                 GameDiagnostics.End();
+                // Swift restores stdout/stderr after this owner thread returns.
+                // Drain queued and in-flight console writes while the session's
+                // descriptors are still installed, including its final errors.
+                try { Logger.Flush(); }
+                catch { /* Console I/O must not prevent completing the session. */ }
                 // Preserve requests made before the new emulation thread entered
                 // this function; consume them only after this run has fully ended.
                 Volatile.Write(ref _stopRequested, 0);
@@ -248,6 +253,12 @@ namespace Ryujinx.Library
             // Numeric platform state only. No paths, account identifiers or arbitrary payloads.
             GameDiagnostics.Event($"platform: thermal={thermalState}; low_power={lowPower}; app_state={appState}; memory_warning={memoryWarning}");
             if (memoryWarning != 0) GameDiagnostics.Problem("iOS memory warning");
+        }
+
+        [UnmanagedCallersOnly(EntryPoint = "nsduo_memory_budget")]
+        public static void UpdateTextureMemoryBudget(ulong availableBytes, int memoryWarning)
+        {
+            _emulationContext?.Gpu.UpdateTextureMemoryBudget(availableBytes, memoryWarning != 0);
         }
 
         [UnmanagedCallersOnly(EntryPoint = "load_keyset")]

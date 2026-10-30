@@ -143,8 +143,8 @@ final class NSDuoIntegratedJIT: ObservableObject {
     }
 
     private func preflight() -> Bool {
-        guard #available(iOS 26.0, *), getenv("LC_HOME_PATH") == nil else {
-            fail("内置运行需要 iOS 26 或更高版本，并直接安装 NS Duo。")
+        guard #available(iOS 17.4, *), getenv("LC_HOME_PATH") == nil else {
+            fail("内置运行需要 iOS 17.4 或更高版本，并直接安装 NS Duo。")
             return false
         }
         guard checkAppEntitlement("get-task-allow") else {

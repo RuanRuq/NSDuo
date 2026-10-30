@@ -32,6 +32,13 @@ func UnregisterCallback(_ name: UnsafePointer<CChar>) {
     native.lock.lock(); defer { native.lock.unlock() }
     native.entries.removeValue(forKey: String(cString: name))
 }
+final class WorkCounter: @unchecked Sendable {
+    private let lock = NSLock()
+    private var count = 0
+    var value: Int { lock.lock(); defer { lock.unlock() }; return count }
+    func increment() { lock.lock(); count += 1; lock.unlock() }
+    func reset() { lock.lock(); count = 0; lock.unlock() }
+}
 final class Probe {
     let onRelease: () -> Void
     init(_ onRelease: @escaping () -> Void = {}) { self.onRelease = onRelease }
@@ -67,9 +74,9 @@ nonisolated enum NSDuoPackageInspector {
         let handle = try FileHandle(forReadingFrom: url); defer { try? handle.close() }
         try handle.seek(toOffset: 0x180)
         let bytes = Array(try handle.read(upToCount: 2)!)
-        let kind = bytes[0] == 0 ? "application" : bytes[0] == 1 ? "patch" : "dlc"
+        let kind = bytes[0] == 0 || bytes[0] == 4 ? "application" : bytes[0] == 1 ? "patch" : "dlc"
         return [.init(kind: kind, titleID: bytes[0] == 2 ? "0100000000001001" : "0100000000000000",
-                      applicationID: "0100000000000000", version: UInt32(bytes[1]),
+                      applicationID: bytes[0] == 3 || bytes[0] == 4 ? "0100000000002000" : "0100000000000000", version: UInt32(bytes[1]),
                       displayVersion: String(bytes[1]), ncaPath: kind == "dlc" ? "/dlc.nca" : nil)]
     }
 }
@@ -240,6 +247,24 @@ nonisolated enum NSDuoPackageInspector {
         games = try NSDuoFolderIO.scan(source: source, root: root, previous: games[0], existing: games, operation: NSDuoImportOperation()) { _ in }
         let attributes = try fm.attributesOfItem(atPath: manifest.path)
         check(attributes[.modificationDate] as? Date == date, "unchanged scan rewrote manifest")
+        let repeatedWork = WorkCounter()
+        games = try NSDuoFolderIO.scan(source: source, root: root, previous: nil, existing: games, operation: NSDuoImportOperation()) { progress in
+            if progress.phase == .copying || progress.phase == .decompressing { repeatedWork.increment() }
+        }
+        if ProcessInfo.processInfo.environment["NSDUO_SKIP_REPEAT_ASSERT"] == nil {
+            check(repeatedWork.value == 0, "re-adding the same folder recopied existing content")
+        }
+        _ = try fixture("wrong-game-dlc.xci", kind: 3, version: 1)
+        games = try NSDuoFolderIO.scan(source: source, root: root, previous: games[0], existing: games, operation: NSDuoImportOperation()) { _ in }
+        repeatedWork.reset()
+        games = try NSDuoFolderIO.scan(source: source, root: root, previous: games[0], existing: games, operation: NSDuoImportOperation()) { progress in
+            if progress.phase == .copying || progress.phase == .decompressing { repeatedWork.increment() }
+        }
+        check(repeatedWork.value == 0, "ignored foreign DLC was copied again without source changes")
+        // Replacing an ignored source with a matching DLC must invalidate the negative cache.
+        _ = try fixture("wrong-game-dlc.xci", kind: 2, version: 0)
+        games = try NSDuoFolderIO.scan(source: source, root: root, previous: games[0], existing: games, operation: NSDuoImportOperation()) { _ in }
+        check(games[0].folder!.files.contains { $0.sourcePath == "wrong-game-dlc.xci" }, "changed ignored file was never reconsidered")
         // Nested changes must be found even if the selected root's mtime is unchanged.
         let rootDate = try source.resourceValues(forKeys: [.contentModificationDateKey]).contentModificationDate!
         _ = try fixture("任意名称/二级/patch.xci", kind: 1, version: 3)
@@ -281,6 +306,12 @@ nonisolated enum NSDuoPackageInspector {
         try fm.removeItem(at: base)
         games = try NSDuoFolderIO.scan(source: source, root: root, previous: games[0], existing: games, operation: NSDuoImportOperation()) { _ in }
         check(games[0].folder!.selection.base != nil, "scan discarded app-owned base")
+        // Reusing the same directory for a different game must still import it.
+        for item in try fm.contentsOfDirectory(at: source, includingPropertiesForKeys: nil) { try fm.removeItem(at: item) }
+        _ = try fixture("different-base.xci", kind: 4, version: 2)
+        let oldIDs = Set(games.map(\.id))
+        games = try NSDuoFolderIO.scan(source: source, root: root, previous: nil, existing: games, operation: NSDuoImportOperation()) { _ in }
+        check(games.contains { !oldIDs.contains($0.id) && $0.folder?.applicationID == "0100000000002000" }, "manual re-add locked a repurposed folder to the old game")
         print("PASS: streaming hash/copy, size changes, cancellation, unchanged manifest, nested content, shared-file retention and commit-safe reclamation")
     }
     @MainActor static func inputLifecycle() async throws {

@@ -36,7 +36,7 @@ public struct GameInfo: Codable, Identifiable, Equatable, Hashable, Sendable {
         self.iconData = iconData
     }
     
-    init(_ gameInfo: GameInfoC, url: URL) {
+    nonisolated init(_ gameInfo: GameInfoC, url: URL) {
         self.containerFolder = url.deletingLastPathComponent()
         self.fileURL = url
         self.fileType = .item
@@ -73,7 +73,7 @@ public struct GameInfo: Codable, Identifiable, Equatable, Hashable, Sendable {
     
     
     
-    func createImage(from gameInfo: GameInfoC) -> Data? {
+    nonisolated func createImage(from gameInfo: GameInfoC) -> Data? {
        let imageSize = Int(gameInfo.ImageSize)
        if imageSize > 0, imageSize <= 1024 * 1024 {
            return Data(bytes: gameInfo.ImageData, count: imageSize)

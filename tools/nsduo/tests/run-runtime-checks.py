@@ -9,7 +9,7 @@ import subprocess
 
 ROOT = Path(__file__).resolve().parents[3]
 TESTS = Path(__file__).resolve().parent
-OUT = ROOT / 'work/runtime-checks'
+OUT = Path(os.environ.get('NSDUO_RUNTIME_OUTPUT', str(ROOT / 'work/runtime-checks')))
 OUT.mkdir(parents=True, exist_ok=True)
 SWIFT = ROOT / 'src/MeloNX/MeloNX'
 ENV = dict(os.environ)
@@ -34,7 +34,7 @@ types = ['nonisolated enum NSDuoGameFormat:', 'nonisolated struct NSDuoLibraryGa
 (OUT / 'LibraryTypes.swift').write_text('import Foundation\nimport CryptoKit\n' +
     '\n\n'.join(block(store, kind) for kind in types) + '\n' +
     block(package, 'nonisolated struct NSDuoPackageContent:'))
-folder = (SWIFT / 'Core/Duo/NSDuoFolderLibrary.swift').read_text()
+folder = Path(os.environ.get('NSDUO_FOLDER_SOURCE', str(SWIFT / 'Core/Duo/NSDuoFolderLibrary.swift'))).read_text()
 # Visibility only: exercise the actual streaming implementation for corruption/cancellation.
 (OUT / 'FolderIO.swift').write_text(folder.replace('private static func streamCopy(', 'static func streamCopy('))
 sources = [SWIFT / p for p in ['Core/Callbacks/CallbackManager.swift', 'Core/Models/CallbackData.swift',

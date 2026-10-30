@@ -75,12 +75,32 @@ python3 tools/nsduo/tests/run-diagnostics-checks.py
 
 同时编译实际 Swift 日志文件操作，验证清除范围、符号链接处理、游戏/存档保留、重复清除、清除后可再次写入，以及异常路径。日志页面的“清除日志”需要确认，只删除本机诊断记录和临时导出文件，之后继续自动记录。已保存到“文件”或其他位置的日志副本不受影响。
 
-运行记录自动存于手机 `Documents/Diagnostics`。每次运行日志正文最多约 4 MiB；正常结束后保留最近 5 次普通记录和 10 次问题记录。游戏右上角旗帜按钮标记刚才的问题；游戏库菜单的“诊断日志”可选择记录，再分享或存储为文本。没有自动上传；需要长期保留的记录应主动导出。
+运行记录自动存于手机 `Documents/Diagnostics`。每次运行日志正文最多约 4 MiB；正常结束后保留最近 5 次普通记录和 10 次问题记录。游戏内左上角仅保留暂停和返回游戏库按钮；游戏库菜单的“诊断日志”可选择记录，再分享或存储为文本。没有自动上传；需要长期保留的记录应主动导出。
 
 日志包含核心初始化阶段、GPU 编译与等待信息、呈现帧间隔、核心统计、托管内存、温度状态、低电量模式、前后台及内存警告。无新画面也可能是游戏正常加载；未正常结束也可能是强制退出或系统终止，不能单凭这些标记判定根因。日志不是完整 iOS 崩溃报告，也不会记录从未触发的游戏内容。进程突然终止时，最后约一秒或尚未处理的队列内容可能丢失。
 
-The diagnostic checks compile the production recorder with synthetic events and controlled timestamps. They verify frame stalls, pause/resume, queue and file limits, retention, interrupted-session markers, redaction and I/O failure. Device sessions are stored locally under `Documents/Diagnostics`; the flag button marks an issue, and the library's diagnostic menu exports an allowlisted text report. There is no automatic upload. Logs retain roughly 4 MiB per session, with five ordinary and ten problem sessions after clean shutdown. No-frame and interrupted-session markers are clues, not proof of a crash or its cause. Abrupt termination may lose the last buffered events; iOS crash reports may still be needed.
+The diagnostic checks compile the production recorder with synthetic events and controlled timestamps. They verify frame stalls, pause/resume, queue and file limits, retention, interrupted-session markers, redaction and I/O failure. Device sessions are stored locally under `Documents/Diagnostics`; the library's diagnostic menu exports an allowlisted text report. The in-game controls at the top left provide pause and return-to-library actions. There is no automatic upload. Logs retain roughly 4 MiB per session, with five ordinary and ten problem sessions after clean shutdown. No-frame and interrupted-session markers are clues, not proof of a crash or its cause. Abrupt termination may lose the last buffered events; iOS crash reports may still be needed.
 
 The Swift file checks also exercise scoped clearing, symlinks, preserved game/save fixtures, repeated clearing, subsequent recording and error handling. The diagnostic page confirms before deleting its local records and temporary exports. Recording continues during future play; copies saved elsewhere remain untouched.
 
 Native-host regressions use the production `ReleaseInformation` implementation with no managed entry assembly. They also check that metadata/setup failures remain isolated from game startup and that later diagnostic sessions can record successfully.
+
+## 2026-10-30 性能优化回归
+
+以下命令只运行主机逻辑检查，不构建 iOS App，不启动模拟器；SDK、输出与缓存沿用工程内目录。
+
+```sh
+python3 tools/nsduo/tests/run-gpu-memory-checks.py
+python3 tools/nsduo/tests/run-audio-checks.py
+python3 tools/nsduo/tests/run-jit-sharing-checks.py
+python3 tools/nsduo/tests/run-library-performance-checks.py
+python3 tools/nsduo/tests/run-console-motion-checks.py
+```
+
+- GPU：短缓存首次引用、重复引用与到期释放；内存压力采样、多缓存分摊、分批淘汰及保护当前呈现纹理；默认 shader 构造路径受并发调度器约束。
+- 音频：生产 PCM/描述记录交错、跨缓冲完成计数、完整音量整数 PCM 快路径、浮点及其它增益保留 SDL 行为、生命周期与锁顺序。
+- JIT：仅合并同实例同代际的在途编译；不同地址/模式仍能推进；编译异常可重试、失效拒绝旧结果、重入与关闭可退出。原生 Map 仍为测试边界。
+- 游戏库：串行 worker、启动抢占自动扫描但等待不可取消提交完成、采用最新目录记录、封面取消交接及硬内存预算。原有 runtime 检查补充目录复用、忽略文件指纹变化及目录更换游戏。
+- 日志与体感：控制台轮转、输出描述符恢复、多次会话、重复低等级日志合并、退出排空在途错误日志、按游戏保存体感偏好。
+
+这些检查验证逻辑与资源生命周期；FPS、峰值内存、发热、真实音频和触控体感仍需真机对比。日志分段目标为 2 MiB，按秒检查，瞬时大量输出可能超过目标；纹理回收每帧限制次数和启动新回收的时间窗口，单次驱动 flush 仍可能较慢。

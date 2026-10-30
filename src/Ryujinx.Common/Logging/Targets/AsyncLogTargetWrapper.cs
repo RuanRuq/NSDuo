@@ -81,15 +81,24 @@ namespace Ryujinx.Common.Logging.Targets
 
         public void Log(object sender, LogEventArgs e)
         {
-            if (!_messageQueue.IsAddingCompleted)
+            try
             {
-                _messageQueue.TryAdd(e, _overflowTimeout);
+                if (!_messageQueue.IsAddingCompleted)
+                {
+                    _messageQueue.TryAdd(e, _overflowTimeout);
+                }
+            }
+            catch (InvalidOperationException)
+            {
+                // CompleteAdding may race a producer during shutdown.
             }
         }
 
         public void Flush()
         {
-            if (_messageQueue.Count == 0 || _messageQueue.IsAddingCompleted)
+            // A target can log/flush from its own callback. It cannot wait for a
+            // barrier that only this same worker can consume.
+            if (Thread.CurrentThread == _messageThread)
             {
                 return;
             }
@@ -101,9 +110,14 @@ namespace Ryujinx.Common.Logging.Targets
             }
             catch (InvalidOperationException)
             {
+                // Disposal closed the queue; its worker still drains queued and
+                // already-dequeued records. Wait for that drain before returning.
+                _messageThread.Join();
                 return;
             }
 
+            // Always enqueue the barrier. Count == 0 does not mean the target
+            // has finished writing the record it already took from the queue.
             signal.Wait();
         }
 
@@ -111,7 +125,10 @@ namespace Ryujinx.Common.Logging.Targets
         {
             GC.SuppressFinalize(this);
             _messageQueue.CompleteAdding();
-            _messageThread.Join();
+            if (Thread.CurrentThread != _messageThread)
+            {
+                _messageThread.Join();
+            }
         }
     }
 }

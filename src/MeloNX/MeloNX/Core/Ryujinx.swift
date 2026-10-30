@@ -34,7 +34,7 @@ final class Ryujinx {
         MeloNX.set_native_window(layerPtr)
     }
     
-    static func getGameInfo(arg0: Int32, arg1: NSString, path: URL) -> GameInfo {
+    nonisolated static func getGameInfo(arg0: Int32, arg1: NSString, path: URL) -> GameInfo {
         let arg1Ptr = UnsafeMutablePointer<CChar>(mutating: arg1.utf8String)
         return GameInfo(MeloNX.get_game_info(arg0, arg1Ptr), url: path)
     }
@@ -81,11 +81,11 @@ final class Ryujinx {
         MeloNX.init_dualmapping()
     }
     
-    static func reloadKeySet() {
+    nonisolated static func reloadKeySet() {
         MeloNX.load_keyset()
     }
     
-    static var installedFirmwareVersion: String {
+    nonisolated static var installedFirmwareVersion: String {
         let firmware = MeloNX.installed_firmware_version()
         defer { MeloNX.free_firmware_version(firmware) }
         return String(cString: firmware)
@@ -429,10 +429,10 @@ fileprivate func stop_emulation()
 fileprivate func prepare_emulation_start()
 
 @_silgen_name("load_keyset")
-fileprivate func load_keyset()
+nonisolated fileprivate func load_keyset()
 
 @_silgen_name("installed_firmware_version")
-fileprivate func installed_firmware_version() -> UnsafePointer<CChar>
+nonisolated fileprivate func installed_firmware_version() -> UnsafePointer<CChar>
 
 @_silgen_name("free_firmware_version")
 nonisolated fileprivate func free_firmware_version(_ versionPtr: UnsafePointer<CChar>)

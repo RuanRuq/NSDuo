@@ -93,7 +93,13 @@ class ControllerManager: ObservableObject {
     }
     
     private var emulationActive = false
+    private var motionEnabled = true
     private var attachedControllerIDs = Set<String>()
+
+    func setMotionEnabled(_ enabled: Bool) {
+        motionEnabled = enabled
+        setEmulationActive(emulationActive)
+    }
 
     func setEmulationActive(_ active: Bool) {
         emulationActive = active
@@ -101,7 +107,7 @@ class ControllerManager: ObservableObject {
         for controller in controllers {
             let selected = attachedControllerIDs.contains(controller.id)
             controller.setRumbleActive(active && selected)
-            controller.setMotionActive(active && selected)
+            controller.setMotionActive(active && selected && motionEnabled)
         }
     }
 

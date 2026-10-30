@@ -146,6 +146,14 @@ class RyujinxController: ObservableObject {
     
     @Published var _isPaused: Bool = false
     @Published private(set) var isStopping: Bool = false
+    @Published private(set) var motionEnabled = true
+
+    func setMotionEnabled(_ enabled: Bool) {
+        guard case .started(let game, _) = isRunning, !isStopping else { return }
+        NSDuoMotionPreferences.setEnabled(enabled, titleID: game.titleId)
+        motionEnabled = enabled
+        controllerManager.setMotionEnabled(enabled)
+    }
     
     @Published var wasManuallyPaused: Bool = false
     
@@ -255,16 +263,25 @@ class RyujinxController: ObservableObject {
         wasManuallyPaused = false
         isStopping = false
         emulationThreadActive = true
+        motionEnabled = NSDuoMotionPreferences.isEnabled(titleID: game.titleId)
+        controllerManager.setMotionEnabled(motionEnabled)
         controllerManager.setEmulationActive(true)
 
         let nativeSettingsManager = NativeSettingsManager.shared
         
-        if !(nativeSettingsManager.writeStdout.value as Bool) {
-            redirectStdIOToFile()
-        }
-        
+        let writeConsoleToFile = !(nativeSettingsManager.writeStdout.value as Bool)
+        let logsDirectory = URL.documentsDirectory.appendingPathComponent("logs")
+
         Thread.detachNewThread {
+            // Prepare files on the emulation owner, before any core logs are emitted.
+            // A log I/O failure must not prevent starting the game.
+            if writeConsoleToFile {
+                try? NSDuoConsoleLog.shared.start(in: logsDirectory)
+            } else {
+                NSDuoConsoleLog.shared.stop()
+            }
             let response = Ryujinx.mainRyu(settings)
+            NSDuoConsoleLog.shared.stop()
             
             DispatchQueue.main.async {
                 self.emulationThreadActive = false
@@ -282,55 +299,6 @@ class RyujinxController: ObservableObject {
         }
     }
     
-    
-    func redirectStdIOToFile() {
-        let fileManager = FileManager.default
-        
-        let logsDir = URL.documentsDirectory.appendingPathComponent("logs")
-        
-        if !fileManager.fileExists(atPath: logsDir.path) {
-            try? fileManager.createDirectory(at: logsDir, withIntermediateDirectories: true)
-        }
-        
-        cleanupOldLogs(in: logsDir, keep: 5)
-        
-        let fileName = "MeloNX-Log-\(Date()).log"
-        let logURL = logsDir.appendingPathComponent(fileName)
-        
-        fileManager.createFile(atPath: logURL.path, contents: nil)
-        
-        let fd = open(logURL.path, O_WRONLY | O_APPEND, 0o644)
-        guard fd >= 0 else { return }
-        
-        dup2(fd, STDOUT_FILENO)
-        dup2(fd, STDERR_FILENO)
-        
-        close(fd)
-    }
-    
-    func cleanupOldLogs(in directory: URL, keep: Int) {
-        let fileManager = FileManager.default
-        
-        guard var files = try? fileManager.contentsOfDirectory(
-            at: directory,
-            includingPropertiesForKeys: [.creationDateKey],
-            options: .skipsHiddenFiles
-        ) else { return }
-        
-        files = files.compactMap({ $0.lastPathComponent.hasPrefix("MeloNX-Log-") ? $0 : nil })
-        
-        let sortedFiles = files.sorted {
-            let date1 = (try? $0.resourceValues(forKeys: [.creationDateKey]).creationDate) ?? .distantPast
-            let date2 = (try? $1.resourceValues(forKeys: [.creationDateKey]).creationDate) ?? .distantPast
-            return date1 > date2
-        }
-        
-        let filesToDelete = sortedFiles.dropFirst(keep)
-        
-        for file in filesToDelete {
-            try? fileManager.removeItem(at: file)
-        }
-    }
     
     func loadConfig() {
         if let settings = try? Options.loadFromJSON(at: .configURL) {

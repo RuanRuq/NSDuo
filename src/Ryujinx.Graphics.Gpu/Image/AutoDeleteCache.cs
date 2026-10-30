@@ -2,6 +2,7 @@ using Ryujinx.Common.Logging;
 using System;
 using System.Collections;
 using System.Collections.Generic;
+using System.Diagnostics;
 
 namespace Ryujinx.Graphics.Gpu.Image
 {
@@ -58,6 +59,11 @@ namespace Ryujinx.Graphics.Gpu.Image
 
         private const float MemoryScaleFactor = 0.50f;
         private ulong _maxCacheMemoryUsage = DefaultTextureSizeCapacity;
+        private ulong _configuredCacheMemoryUsage = DefaultTextureSizeCapacity;
+        private TextureCacheMemoryBudget.Sample _memorySample;
+        private const ulong MobileMinimumBudget = 64 * 1024 * 1024;
+        private const ulong MobileMemoryReserve = 256 * 1024 * 1024;
+        private const int MaxPressureRemovalsPerTick = 4;
 
         private readonly LinkedList<Texture> _textures;
         private ulong _totalSize;
@@ -102,6 +108,7 @@ namespace Ryujinx.Graphics.Gpu.Image
             ulong cacheMemory = (ulong)(context.Capabilities.MaximumGpuMemory * MemoryScaleFactor);
 
             _maxCacheMemoryUsage = Math.Clamp(cacheMemory, MinTextureSizeCapacity, MaxTextureSizeCapacity);
+            _configuredCacheMemoryUsage = _maxCacheMemoryUsage;
 
             Logger.Info?.Print(LogClass.Gpu, $"AutoDelete Cache Allocated VRAM : {_maxCacheMemoryUsage / GiB} GiB");
         }
@@ -154,6 +161,11 @@ namespace Ryujinx.Graphics.Gpu.Image
         {
             if (texture.CacheNode != null)
             {
+                if (texture.ShortCacheEntry?.IsAutoDelete == true)
+                {
+                    // A render target used again must not expire through an old overlap entry.
+                    RemoveShortCache(texture);
+                }
                 if (texture.CacheNode != _textures.Last)
                 {
                     _textures.Remove(texture.CacheNode);
@@ -176,7 +188,11 @@ namespace Ryujinx.Graphics.Gpu.Image
         /// </summary>
         private void RemoveLeastUsedTexture()
         {
-            Texture oldestTexture = _textures.First.Value;
+            RemoveCachedTexture(_textures.First.Value);
+        }
+
+        private void RemoveCachedTexture(Texture oldestTexture)
+        {
 
             _totalSize -= oldestTexture.Size;
 
@@ -190,10 +206,50 @@ namespace Ryujinx.Graphics.Gpu.Image
                 oldestTexture.FlushModified(false);
             }
 
-            _textures.RemoveFirst();
-
-            oldestTexture.DecrementReferenceCount();
+            _textures.Remove(oldestTexture.CacheNode);
             oldestTexture.CacheNode = null;
+            oldestTexture.DecrementReferenceCount();
+        }
+
+        // The budget uses a single platform sample, not every frame's free memory.
+        // Counting retained textures in the working set avoids a shrinking feedback loop.
+        internal void ProcessMemoryPressure(TextureCacheMemoryBudget.Sample sample, Texture protectedTexture)
+        {
+            if (sample == null) return;
+
+            if (!ReferenceEquals(sample, _memorySample))
+            {
+                ulong available = sample.AvailableBytes / (ulong)sample.CacheCount;
+                ulong workingSet = ulong.MaxValue - _totalSize < available ? ulong.MaxValue : available + _totalSize;
+                ulong reserve = MobileMemoryReserve / (ulong)sample.CacheCount;
+                ulong limit = Math.Max(MobileMinimumBudget,
+                    _configuredCacheMemoryUsage / (ulong)sample.CacheCount);
+                ulong target = Math.Clamp(workingSet > reserve ? (workingSet - reserve) / 2 : 0,
+                    MobileMinimumBudget, limit);
+                if (sample.Warnings > (_memorySample?.Warnings ?? 0))
+                    target = Math.Min(target, Math.Max(MobileMinimumBudget, _totalSize / 2));
+                // Recover gradually after pressure so successive samples cannot refill immediately.
+                if (_memorySample != null && target > _maxCacheMemoryUsage)
+                    target = Math.Min(target, _maxCacheMemoryUsage + MobileMinimumBudget);
+                _maxCacheMemoryUsage = target;
+                _memorySample = sample;
+            }
+
+            long started = Stopwatch.GetTimestamp();
+            int removed = 0;
+            while (_totalSize > _maxCacheMemoryUsage && removed < MaxPressureRemovalsPerTick)
+            {
+                // Synchronizing/flushing can re-enter the cache and remove another node.
+                // Never carry a linked-list cursor across an eviction.
+                LinkedListNode<Texture> node = _textures.First;
+                if (node != null && node.Value == protectedTexture) node = node.Next;
+                if (node == null) break;
+                Texture texture = node.Value;
+                RemoveCachedTexture(texture);
+                removed++;
+                // A single required GPU flush cannot be preempted; do not start more work after 2 ms.
+                if (Stopwatch.GetElapsedTime(started).TotalMilliseconds >= 2) break;
+            }
         }
 
         /// <summary>
@@ -252,19 +308,19 @@ namespace Ryujinx.Graphics.Gpu.Image
         /// <param name="texture">Texture to remove from the short cache</param>
         public void RemoveShortCache(Texture texture)
         {
-            bool removed = _shortCache.Remove(texture.ShortCacheEntry);
-            removed |= _shortCacheBuilder.Remove(texture.ShortCacheEntry);
+            ShortTextureCacheEntry entry = texture.ShortCacheEntry;
+            bool removed = _shortCache.Remove(entry);
+            removed |= _shortCacheBuilder.Remove(entry);
 
             if (removed)
             {
-                texture.DecrementReferenceCount();
-
-                if (!texture.ShortCacheEntry.IsAutoDelete)
+                if (!entry.IsAutoDelete)
                 {
-                    _shortCacheLookup.Remove(texture.ShortCacheEntry.Descriptor);
+                    _shortCacheLookup.Remove(entry.Descriptor);
                 }
 
                 texture.ShortCacheEntry = null;
+                texture.DecrementReferenceCount();
             }
         }
 
@@ -293,7 +349,7 @@ namespace Ryujinx.Graphics.Gpu.Image
         /// <param name="texture">Texture to add to the short cache</param>
         public void AddShortCache(Texture texture)
         {
-            if (texture.ShortCacheEntry != null)
+            if (texture.ShortCacheEntry == null)
             {
                 ShortTextureCacheEntry entry = new(texture);
 
@@ -309,13 +365,19 @@ namespace Ryujinx.Graphics.Gpu.Image
         /// Delete textures from the short duration cache.
         /// Moves the builder set to be deleted on next process.
         /// </summary>
-        public void ProcessShortCache()
+        public void ProcessShortCache(Texture protectedTexture = null)
         {
             HashSet<ShortTextureCacheEntry> toRemove = _shortCache;
 
             foreach (ShortTextureCacheEntry entry in toRemove)
             {
-                entry.Texture.DecrementReferenceCount();
+                if (entry.Texture == protectedTexture)
+                {
+                    _shortCacheBuilder.Add(entry);
+                    continue;
+                }
+                // Detach before releasing ownership: destruction can re-enter cache removal.
+                entry.Texture.ShortCacheEntry = null;
 
                 if (entry.IsAutoDelete)
                 {
@@ -326,7 +388,7 @@ namespace Ryujinx.Graphics.Gpu.Image
                     _shortCacheLookup.Remove(entry.Descriptor);
                 }
 
-                entry.Texture.ShortCacheEntry = null;
+                entry.Texture.DecrementReferenceCount();
             }
 
             toRemove.Clear();

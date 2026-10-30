@@ -37,6 +37,8 @@ final class NSDuoGamepadSurface: UIView {
     private var points: [ObjectIdentifier: CGPoint] = [:]
     private var pressed: Set<Key> = []
     private var rects: [Key: CGRect] = [:]
+    private var buttonPaths: [Key: UIBezierPath] = [:]
+    private var buttonLabels: [Key: (normal: NSAttributedString, pressed: NSAttributedString, size: CGSize)] = [:]
     private var leftCenter = CGPoint.zero
     private var rightCenter = CGPoint.zero
     private var leftValue = CGPoint.zero
@@ -44,7 +46,12 @@ final class NSDuoGamepadSurface: UIView {
     private var radius: CGFloat = 40
     private var previousBounds = CGRect.zero
     private let input = VirtualControllerManager.shared
-    private lazy var buttonFeedback = UIImpactFeedbackGenerator(style: .light, view: self)
+    private lazy var buttonFeedback: UIImpactFeedbackGenerator = {
+        if #available(iOS 17.5, *) {
+            return UIImpactFeedbackGenerator(style: .light, view: self)
+        }
+        return UIImpactFeedbackGenerator(style: .light)
+    }()
 
     override init(frame: CGRect) {
         super.init(frame: frame)
@@ -88,6 +95,15 @@ final class NSDuoGamepadSurface: UIView {
         put(.up, 0.35, 0.68 - stepY); put(.down, 0.35, 0.68 + stepY)
         put(.left, 0.35 - stepX, 0.68); put(.right, 0.35 + stepX, 0.68)
         put(.l3, 0.13, 0.84); put(.r3, 0.87, 0.84)
+        buttonPaths.removeAll(keepingCapacity: true)
+        buttonLabels.removeAll(keepingCapacity: true)
+        for (key, frame) in rects {
+            buttonPaths[key] = UIBezierPath(roundedRect: frame, cornerRadius: frame.height * 0.42)
+            let font = UIFont.systemFont(ofSize: min(21, frame.height * 0.43), weight: .semibold)
+            let normal = NSAttributedString(string: key.label, attributes: [.font: font, .foregroundColor: UIColor.white])
+            let down = NSAttributedString(string: key.label, attributes: [.font: font, .foregroundColor: UIColor.black])
+            buttonLabels[key] = (normal, down, normal.size())
+        }
         setNeedsDisplay()
     }
 
@@ -130,6 +146,7 @@ final class NSDuoGamepadSurface: UIView {
         publish()
     }
     private func publish() {
+        let oldLeft = leftValue, oldRight = rightValue
         var next: Set<Key> = []
         leftValue = .zero; rightValue = .zero
         for (id, control) in assignments {
@@ -147,14 +164,26 @@ final class NSDuoGamepadSurface: UIView {
         // One pulse per new press batch, including sliding onto another button.
         // Stick movement, held buttons and releases do not trigger feedback.
         if let key = newlyPressed.min(by: { $0.rawValue < $1.rawValue }), let rect = rects[key] {
-            buttonFeedback.impactOccurred(intensity: 0.35, at: CGPoint(x: rect.midX, y: rect.midY))
+            if #available(iOS 17.5, *) {
+                buttonFeedback.impactOccurred(intensity: 0.35, at: CGPoint(x: rect.midX, y: rect.midY))
+            } else {
+                buttonFeedback.impactOccurred(intensity: 0.35)
+            }
             buttonFeedback.prepare()
         }
         for key in pressed.subtracting(next) { input.buttonReleased(key.mapping) }
+        for key in pressed.symmetricDifference(next) {
+            if let frame = rects[key] { setNeedsDisplay(frame.insetBy(dx: -2, dy: -2)) }
+        }
         pressed = next
-        input.joystickMoved(position: leftValue, right: false)
-        input.joystickMoved(position: rightValue, right: true)
-        setNeedsDisplay()
+        if oldLeft != leftValue {
+            input.joystickMoved(position: leftValue, right: false)
+            setNeedsDisplay(stickBounds(leftCenter))
+        }
+        if oldRight != rightValue {
+            input.joystickMoved(position: rightValue, right: true)
+            setNeedsDisplay(stickBounds(rightCenter))
+        }
     }
     private func normalized(_ point: CGPoint, around center: CGPoint) -> CGPoint {
         let x = (point.x - center.x) / radius, y = (point.y - center.y) / radius
@@ -167,15 +196,21 @@ final class NSDuoGamepadSurface: UIView {
 
     override func draw(_ rect: CGRect) {
         for key in Key.allCases {
-            guard let frame = rects[key] else { continue }
+            guard let frame = rects[key], frame.insetBy(dx: -2, dy: -2).intersects(rect),
+                  let shape = buttonPaths[key], let label = buttonLabels[key] else { continue }
             let down = pressed.contains(key)
-            let shape = UIBezierPath(roundedRect: frame, cornerRadius: frame.height * 0.42)
             (down ? UIColor.systemTeal : UIColor.white.withAlphaComponent(0.10)).setFill(); shape.fill()
             UIColor.white.withAlphaComponent(0.18).setStroke(); shape.lineWidth = 1; shape.stroke()
-            drawText(key.label, in: frame, size: min(21, frame.height * 0.43), color: down ? .black : .white)
+            (down ? label.pressed : label.normal).draw(at: CGPoint(x: frame.midX - label.size.width / 2,
+                                                                  y: frame.midY - label.size.height / 2))
         }
-        drawStick(center: leftCenter, value: leftValue)
-        drawStick(center: rightCenter, value: rightValue)
+        if stickBounds(leftCenter).intersects(rect) { drawStick(center: leftCenter, value: leftValue) }
+        if stickBounds(rightCenter).intersects(rect) { drawStick(center: rightCenter, value: rightValue) }
+    }
+    private func stickBounds(_ center: CGPoint) -> CGRect {
+        // The knob reaches 1.07 radii at full tilt, slightly outside the base.
+        let reach = radius * 1.07 + 2
+        return CGRect(x: center.x - reach, y: center.y - reach, width: reach * 2, height: reach * 2)
     }
     private func drawStick(center: CGPoint, value: CGPoint) {
         let base = CGRect(x: center.x - radius, y: center.y - radius, width: radius * 2, height: radius * 2)
@@ -184,11 +219,6 @@ final class NSDuoGamepadSurface: UIView {
         let knobRadius = radius * 0.52
         let knob = CGRect(x: center.x + value.x * radius * 0.55 - knobRadius, y: center.y + value.y * radius * 0.55 - knobRadius, width: knobRadius * 2, height: knobRadius * 2)
         UIColor.systemGray3.setFill(); UIBezierPath(ovalIn: knob).fill()
-    }
-    private func drawText(_ text: String, in rect: CGRect, size: CGFloat, color: UIColor) {
-        let attributes: [NSAttributedString.Key: Any] = [.font: UIFont.systemFont(ofSize: size, weight: .semibold), .foregroundColor: color]
-        let extent = (text as NSString).size(withAttributes: attributes)
-        (text as NSString).draw(at: CGPoint(x: rect.midX - extent.width / 2, y: rect.midY - extent.height / 2), withAttributes: attributes)
     }
 }
 

@@ -23,6 +23,12 @@ extension BaseController {
                 }
             } else {
                 self.stopMotion()
+                // Do not leave the last angular velocity active when a game disables motion.
+                self.lastAccel = .zero
+                self.lastGyro = .zero
+                if self.isActive {
+                    Ryujinx.setGamepadMotionSample(self.pointer, accelerometer: .zero, gyroscope: .zero)
+                }
             }
         }
     }

@@ -50,6 +50,8 @@ These additions focus on everyday workflow and the mobile experience. Compatibil
 
 ## Usage
 
+The minimum deployment target is **iOS 17.4** for the app, VPN extension and JIT helper. The full app has built successfully with this target. The currently available test device runs iOS 27.2; installation, JIT and gameplay on older systems still require testing on those OS versions.
+
 ### 1. First-time preparation
 
 1. Build and install with **your own developer account**, following the instructions below, and enable Developer Mode on the device.
