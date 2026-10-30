@@ -94,8 +94,8 @@ The development setup used Apple Silicon macOS, Xcode 27.1 and .NET SDK 10.0.100
 Prerequisites: an existing full Xcode installation, Python 3, Git, curl, and a developer account capable of provisioning the host and both extensions with the required capabilities. Generic entitlement declarations are included; personal Team IDs, certificates and provisioning profiles are not.
 
 ```bash
-git clone https://github.com/RuanRuq/NSDou.git
-cd NSDou
+git clone https://github.com/RuanRuq/NSDuo.git
+cd NSDuo
 
 # Dependencies and caches stay inside the project.
 bash tools/nsduo/setup-local.sh
@@ -163,7 +163,7 @@ flowchart TD
 
 Copy this instruction to an agent with local filesystem and terminal access:
 
-> Clone https://github.com/RuanRuq/NSDou into a separate directory, read README.en.md and the licenses, install dependencies only inside the project, check build prerequisites, then build and install NS Duo using the developer team, unique bundle ID and device identifier I provide; ask for missing inputs, do not change other projects or global settings, do not download games, keys or firmware, never upload signing or pairing material, and distinguish verified results from untested behavior.
+> Clone https://github.com/RuanRuq/NSDuo into a separate directory, read README.en.md and the licenses, install dependencies only inside the project, check build prerequisites, then build and install NS Duo using the developer team, unique bundle ID and device identifier I provide; ask for missing inputs, do not change other projects or global settings, do not download games, keys or firmware, never upload signing or pairing material, and distinguish verified results from untested behavior.
 
 This starts assisted setup; it does not replace device permission prompts, developer sign-in, valid pairing or user-supplied game material. No agent configuration, conversations or working-session records are included.
 

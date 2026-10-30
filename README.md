@@ -94,8 +94,8 @@ App 保存访问书签与自己的副本。外部目录失效时会直接使用�
 需要已有完整 Xcode、Python 3、Git、curl，以及能够为主 App 和两个扩展配置所需能力的开发者账号。工程保留通用 entitlements；不含任何个人 Team ID、证书或描述文件。
 
 ```bash
-git clone https://github.com/RuanRuq/NSDou.git
-cd NSDou
+git clone https://github.com/RuanRuq/NSDuo.git
+cd NSDuo
 
 # 依赖与缓存均放在工程内；不会修改全局 shell 或 xcode-select。
 bash tools/nsduo/setup-local.sh
@@ -163,7 +163,7 @@ flowchart TD
 
 复制下面这句话给能够访问本地文件和终端的 AI Agent：
 
-> 请克隆 https://github.com/RuanRuq/NSDou 到一个独立目录，先阅读 README.md 和开源许可，按文档把依赖安装在工程内，检查构建条件，再使用我提供的开发者团队、唯一 Bundle ID 和设备标识构建并安装 NS Duo；缺少信息时询问我，不修改其他项目或全局环境，不下载游戏、密钥或固件，不上传签名与配对资料，并如实报告已验证和未验证的结果。
+> 请克隆 https://github.com/RuanRuq/NSDuo 到一个独立目录，先阅读 README.md 和开源许可，按文档把依赖安装在工程内，检查构建条件，再使用我提供的开发者团队、唯一 Bundle ID 和设备标识构建并安装 NS Duo；缺少信息时询问我，不修改其他项目或全局环境，不下载游戏、密钥或固件，不上传签名与配对资料，并如实报告已验证和未验证的结果。
 
 一句话用于启动自动化协助，不能代替设备上的权限确认、开发者登录、有效配对与用户提供的游戏资料。本仓库不附带 Agent 配置、对话或工作记录。
 
