@@ -72,17 +72,29 @@ nonisolated enum NSDuoDiagnosticFiles {
     }
 
     static func export(_ record: NSDuoDiagnosticRecord) throws -> URL {
+        try export([record])
+    }
+
+    static func export(_ records: [NSDuoDiagnosticRecord]) throws -> URL {
         // Export only the allowlisted diagnostic files, never the game container or keys.
+        guard !records.isEmpty else { throw CocoaError(.fileReadNoSuchFile) }
         let fm = FileManager.default
         let folder = exports
         try fm.createDirectory(at: folder, withIntermediateDirectories: true)
-        let destination = folder.appendingPathComponent("NSDuo-\(record.id).txt")
+        let filename = records.count == 1 ? "NSDuo-\(records[0].id).txt" : "NSDuo-诊断日志-\(UUID().uuidString).txt"
+        let destination = folder.appendingPathComponent(filename)
         var data = Data("NS Duo 本地诊断 / Local diagnostics\n未正常结束可能是闪退、强制退出或系统终止；长时间无帧也可能是正常加载。\n".utf8)
-        for name in ["info.txt", "problem", "running", "previous.log", "current.log"] {
-            let url = record.directory.appendingPathComponent(name)
-            guard fm.fileExists(atPath: url.path) else { continue }
-            data.append(Data("\n--- \(name) ---\n".utf8))
-            data.append(try readBounded(url, limit: 2 * 1024 * 1024 + 8192))
+        for record in records {
+            guard fm.fileExists(atPath: record.directory.appendingPathComponent("info.txt").path) else {
+                throw CocoaError(.fileReadNoSuchFile)
+            }
+            data.append(Data("\n=== 运行记录 / Session: \(record.id) ===\n".utf8))
+            for name in ["info.txt", "problem", "running", "previous.log", "current.log"] {
+                let url = record.directory.appendingPathComponent(name)
+                guard fm.fileExists(atPath: url.path) else { continue }
+                data.append(Data("\n--- \(name) ---\n".utf8))
+                data.append(try readBounded(url, limit: 2 * 1024 * 1024 + 8192))
+            }
         }
         try data.write(to: destination, options: .atomic)
         // Limit temporary exports independently from the retained source sessions.

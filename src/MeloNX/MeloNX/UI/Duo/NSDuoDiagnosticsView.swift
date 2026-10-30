@@ -1,4 +1,5 @@
 import SwiftUI
+import UIKit
 
 struct NSDuoDiagnosticsView: View {
     @Environment(\.dismiss) private var dismiss
@@ -10,6 +11,9 @@ struct NSDuoDiagnosticsView: View {
     @State private var confirmClear = false
     @State private var clearing = false
     @State private var cleared = false
+    @State private var selecting = false
+    @State private var selectedIDs: Set<String> = []
+    @State private var shareItem: NSDuoDiagnosticShareItem?
 
     var body: some View {
         NavigationStack {
@@ -29,8 +33,28 @@ struct NSDuoDiagnosticsView: View {
                         Text(cleared ? "日志已清除，后续游玩会继续自动记录。" : "运行一次游戏后，这里会出现记录。")
                             .foregroundStyle(.secondary)
                     }
+                    if !records.isEmpty {
+                        HStack {
+                            Button(selecting ? "取消选择" : "选择") {
+                                selecting.toggle()
+                                selectedIDs.removeAll()
+                            }
+                            Spacer()
+                            if selecting {
+                                Button(selectedIDs.count == records.count ? "取消全选" : "全选") {
+                                    if selectedIDs.count == records.count { selectedIDs.removeAll() }
+                                    else { selectedIDs = Set(records.map(\.id)) }
+                                }
+                            }
+                        }.buttonStyle(.borderless).disabled(exporting != nil || clearing)
+                    }
                     ForEach(records) { record in
-                        Button { export(record) } label: {
+                        Button {
+                            if selecting {
+                                if selectedIDs.contains(record.id) { selectedIDs.remove(record.id) }
+                                else { selectedIDs.insert(record.id) }
+                            } else { export(record) }
+                        } label: {
                             HStack {
                                 VStack(alignment: .leading, spacing: 5) {
                                     Text(record.title).font(.headline).foregroundStyle(.primary).lineLimit(2)
@@ -39,10 +63,21 @@ struct NSDuoDiagnosticsView: View {
                                         .font(.caption).foregroundStyle(record.hasProblem || record.unfinished ? .orange : .secondary)
                                 }
                                 Spacer()
-                                if exporting == record.id { ProgressView() }
+                                if selecting {
+                                    Image(systemName: selectedIDs.contains(record.id) ? "checkmark.circle.fill" : "circle")
+                                } else if exporting == record.id { ProgressView() }
                                 else { Image(systemName: "square.and.arrow.up") }
                             }.padding(.vertical, 4)
                         }.disabled(exporting != nil || clearing)
+                    }
+                    if selecting {
+                        Button { exportSelected() } label: {
+                            HStack {
+                                Label("分享已选日志（\(selectedIDs.count)）", systemImage: "square.and.arrow.up")
+                                Spacer()
+                                if exporting == "selected" { ProgressView() }
+                            }
+                        }.disabled(selectedIDs.isEmpty || exporting != nil || clearing)
                     }
                 }
                 Section {
@@ -64,6 +99,9 @@ struct NSDuoDiagnosticsView: View {
                 }
             }
             .interactiveDismissDisabled(clearing || exporting != nil)
+            .sheet(item: $shareItem) { item in
+                NSDuoDiagnosticShareSheet(url: item.url)
+            }
             .confirmationDialog("清除本机的全部诊断日志？", isPresented: $confirmClear, titleVisibility: .visible) {
                 Button("清除日志", role: .destructive) { clearLogs() }
                 Button("取消", role: .cancel) { }
@@ -100,14 +138,47 @@ struct NSDuoDiagnosticsView: View {
             do {
                 try await Task.detached(priority: .utility) { try NSDuoDiagnosticFiles.clear() }.value
                 records = []
+                selectedIDs.removeAll()
+                selecting = false
                 cleared = true
             } catch {
                 // A partial failure should show any records that remain on disk.
                 if let remaining = try? await Task.detached(priority: .utility, operation: { try NSDuoDiagnosticFiles.records() }).value {
                     records = remaining
+                    selectedIDs.formIntersection(Set(remaining.map(\.id)))
                 }
                 failure = "未能清除全部日志：\(error.localizedDescription)"
             }
         }
     }
+
+    private func exportSelected() {
+        guard !clearing, exporting == nil else { return }
+        let selected = records.filter { selectedIDs.contains($0.id) }
+        guard !selected.isEmpty else { return }
+        exported = nil
+        exporting = "selected"
+        Task {
+            defer { exporting = nil }
+            do {
+                let url = try await Task.detached(priority: .utility) { try NSDuoDiagnosticFiles.export(selected) }.value
+                shareItem = NSDuoDiagnosticShareItem(url: url)
+            } catch { failure = "无法导出日志：\(error.localizedDescription)" }
+        }
+    }
+}
+
+private struct NSDuoDiagnosticShareItem: Identifiable {
+    let id = UUID()
+    let url: URL
+}
+
+private struct NSDuoDiagnosticShareSheet: UIViewControllerRepresentable {
+    let url: URL
+
+    func makeUIViewController(context: Context) -> UIActivityViewController {
+        UIActivityViewController(activityItems: [url], applicationActivities: nil)
+    }
+
+    func updateUIViewController(_ controller: UIActivityViewController, context: Context) { }
 }
