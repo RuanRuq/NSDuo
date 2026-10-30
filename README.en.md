@@ -18,7 +18,7 @@ Its purpose is not to play cracked games, distribute pirated content or facilita
 
 ## Use with an AI Agent in one sentence
 
-> Clone https://github.com/RuanRuq/NSDuo and follow README.en.md to build and install it on my iPhone; ask me for any missing details.
+> Download [this project](https://github.com/RuanRuq/NSDuo) locally, then sign and install it on my currently connected phone using [Apple Developer account signing identity].
 
 ## What makes NS Duo convenient
 

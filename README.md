@@ -18,7 +18,7 @@
 
 ## 让 AI Agent 一句话使用项目
 
-> 帮我克隆 https://github.com/RuanRuq/NSDuo，按 README 编译并安装到我的 iPhone，缺少必要信息时再问我。
+> 把[https://github.com/RuanRuq/NSDuo](https://github.com/RuanRuq/NSDuo)这个项目下载到本地，然后使用[苹果开发者账号的签名]安装到我正在连接的手机上
 
 ## 项目特色与便利
 
