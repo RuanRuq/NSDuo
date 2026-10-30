@@ -16,6 +16,14 @@ Its purpose is not to play cracked games, distribute pirated content or facilita
 
 **Users must obtain XCI, NSP and NSZ game files themselves through lawful means and ensure they have the rights required to use them.** This project does not supply these files. Required keys, firmware and other materials must also be lawfully provided by the user.
 
+## Use with an AI Agent in one sentence
+
+Copy this instruction to an agent with local filesystem and terminal access:
+
+> Clone https://github.com/RuanRuq/NSDuo into a separate directory, read README.en.md and the licenses, install dependencies only inside the project, check build prerequisites, then build and install NS Duo using the developer team, unique bundle ID and device identifier I provide; ask for missing inputs, do not change other projects or global settings, do not download games, keys or firmware, never upload signing or pairing material, and distinguish verified results from untested behavior.
+
+This starts assisted setup; it does not replace device permission prompts, developer sign-in, valid pairing or user-supplied game material. No agent configuration, conversations or working-session records are included.
+
 ## What makes NS Duo convenient
 
 NS Duo aims to simplify everyday use to: **choose a game folder once, then tap its cover to play.**
@@ -158,14 +166,6 @@ flowchart TD
 - No general save-state/full-process resume support. Multiplayer, universal compatibility and measured performance gains are not promised.
 - There is no universal 60 FPS unlock. Games that natively support 60 FPS still depend on available performance; 30 FPS games may need patches matching their exact version. Changing display refresh rate or VSync does not guarantee normal-speed 60 FPS gameplay.
 - The language switch applies to repository documentation. The customized app interface is primarily Chinese, not fully bilingual.
-
-## Use with an AI Agent in one sentence
-
-Copy this instruction to an agent with local filesystem and terminal access:
-
-> Clone https://github.com/RuanRuq/NSDuo into a separate directory, read README.en.md and the licenses, install dependencies only inside the project, check build prerequisites, then build and install NS Duo using the developer team, unique bundle ID and device identifier I provide; ask for missing inputs, do not change other projects or global settings, do not download games, keys or firmware, never upload signing or pairing material, and distinguish verified results from untested behavior.
-
-This starts assisted setup; it does not replace device permission prompts, developer sign-in, valid pairing or user-supplied game material. No agent configuration, conversations or working-session records are included.
 
 ## Open-source acknowledgments
 
