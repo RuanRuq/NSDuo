@@ -7,7 +7,7 @@ import SwiftUI
 import UniformTypeIdentifiers
 
 struct NSDuoLibraryView: View {
-    let onPlay: (URL) -> Void
+    let onPlay: (NSDuoLibraryGame, CGRect) -> Void
     let onPrepare: () -> Void
     let onImportFolder: (URL) -> Void
     let onImportFile: (URL) -> Void
@@ -22,8 +22,9 @@ struct NSDuoLibraryView: View {
     @State private var pendingRename: NSDuoLibraryGame?
     @State private var renamedTitle = ""
     @State private var showingDiagnostics = false
+    @State private var coverFrames: [UUID: CGRect] = [:]
 
-    init(onPlay: @escaping (URL) -> Void, onPrepare: @escaping () -> Void,
+    init(onPlay: @escaping (NSDuoLibraryGame, CGRect) -> Void, onPrepare: @escaping () -> Void,
          onImportFolder: @escaping (URL) -> Void, onImportFile: @escaping (URL) -> Void,
          onLibraryAppear: @escaping () -> Void, hasPreparedResources: Bool) {
         self.onPlay = onPlay
@@ -39,6 +40,7 @@ struct NSDuoLibraryView: View {
             ScrollView {
                 VStack(alignment: .leading, spacing: 20) {
                     Button {
+                        guard library.isReady, !library.isBusy else { return }
                         importingFolder = true
                         library.isChoosingFiles = true
                         showingImporter = true
@@ -49,25 +51,15 @@ struct NSDuoLibraryView: View {
                     }
                     .buttonStyle(.borderedProminent)
                     .controlSize(.large)
-                    .disabled(!library.isReady || library.isBusy)
+                    .disabled(!library.isReady)
+                    .allowsHitTesting(!library.isBusy)
 
                     Text("选择一个游戏的目录，本体、升级包和 DLC 可以放在任意子文件夹里。")
                         .font(.footnote)
                         .foregroundStyle(.secondary)
 
-                    if let progress = library.importProgress {
+                    if let progress = library.importProgress, !library.isAutomaticFolderCheck {
                         importProgressView(progress)
-                    }
-                    if library.isLoadingCovers && library.importProgress == nil {
-                        ProgressView("正在读取游戏封面…").font(.footnote)
-                    }
-
-                    if library.isPreparingLaunch && library.importProgress == nil {
-                        HStack {
-                            ProgressView("正在准备游戏…")
-                            Spacer()
-                            Button("取消") { library.cancelImport() }
-                        }
                     }
                     if library.isLoading {
                         ProgressView("正在读取游戏库…")
@@ -91,21 +83,33 @@ struct NSDuoLibraryView: View {
                 .frame(maxWidth: .infinity)
             }
             .background(Color(.systemGroupedBackground))
+            .overlay(alignment: .bottom) {
+                libraryActivity
+                    .padding(20)
+            }
             .navigationTitle("NS Duo")
             .toolbar {
                 ToolbarItem(placement: .topBarLeading) {
                     Menu {
                         Button("添加单个 XCI / NSP / NSZ") {
+                            guard library.isReady, !library.isBusy else { return }
                             importingFolder = false
                             library.isChoosingFiles = true
                             showingImporter = true
                         }
-                        Button("诊断日志", systemImage: "doc.text.magnifyingglass") { showingDiagnostics = true }
+                        Button("诊断日志", systemImage: "doc.text.magnifyingglass") {
+                            guard library.isReady, !library.isBusy else { return }
+                            showingDiagnostics = true
+                        }
                     } label: { Image(systemName: "ellipsis.circle") }
-                    .disabled(!library.isReady || library.isBusy)
+                    .disabled(!library.isReady)
+                    .allowsHitTesting(!library.isBusy)
                 }
                 ToolbarItem(placement: .topBarTrailing) {
-                    Button(action: onPrepare) {
+                    Button {
+                        guard !library.isBusy else { return }
+                        onPrepare()
+                    } label: {
                         HStack(spacing: 6) {
                             Text("运行准备").foregroundStyle(.white)
                             if hasPreparedResources && jit.isReady {
@@ -117,12 +121,15 @@ struct NSDuoLibraryView: View {
                     }
                     .font(.footnote)
                     .accessibilityLabel(hasPreparedResources && jit.isReady ? "运行准备，已全部就绪" : "运行准备，尚未全部就绪")
-                    .disabled(library.isBusy)
+                    .allowsHitTesting(!library.isBusy)
                 }
             }
         }
+        .onPreferenceChange(NSDuoGameCoverFrameKey.self) { coverFrames = $0 }
         .task { library.setCoverLoadingSuspended(false); library.loadIfNeeded(); onLibraryAppear() }
-        .onDisappear { library.setCoverLoadingSuspended(true); library.releaseCovers() }
+        // Keep the bounded cover cache across temporary navigation. Launching a
+        // game and memory pressure still release it through the store.
+        .onDisappear { library.setCoverLoadingSuspended(true) }
         .sheet(isPresented: $showingDiagnostics) { NSDuoDiagnosticsView() }
         .onChange(of: showingImporter) { _, shown in library.isChoosingFiles = shown }
         .fileImporter(isPresented: $showingImporter,
@@ -167,6 +174,18 @@ struct NSDuoLibraryView: View {
         }
     }
 
+    @ViewBuilder
+    private var libraryActivity: some View {
+        // Background work must not insert rows above the grid and move it out
+        // of view whenever the library reappears.
+        if library.importProgress == nil && !library.isPreparingLaunch && library.isLoadingCovers {
+            ProgressView("正在读取游戏封面…")
+                .font(.footnote)
+                .padding(14)
+                .background(.regularMaterial, in: RoundedRectangle(cornerRadius: 16))
+        }
+    }
+
     private var emptyLibrary: some View {
         VStack(spacing: 14) {
             Image(systemName: "gamecontroller")
@@ -185,7 +204,7 @@ struct NSDuoLibraryView: View {
 
     private func gameItem(_ game: NSDuoLibraryGame) -> some View {
         Button {
-            library.prepareForLaunch(game, onReady: onPlay)
+            onPlay(game, coverFrames[game.id] ?? .zero)
         } label: {
             VStack(spacing: 10) {
                 gameCover(game)
@@ -250,6 +269,12 @@ struct NSDuoLibraryView: View {
                     .frame(width: 32, height: 32)
                     .background(.black.opacity(0.5), in: Circle())
                     .padding(10)
+            }
+            .background {
+                GeometryReader { geometry in
+                    Color.clear.preference(key: NSDuoGameCoverFrameKey.self,
+                                           value: [game.id: geometry.frame(in: .global)])
+                }
             }
             .accessibilityHidden(true)
     }

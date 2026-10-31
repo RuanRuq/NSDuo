@@ -2,6 +2,8 @@ import SwiftUI
 import MetalKit
 
 struct NSDuoPlayView: View {
+    var onGameReady: () -> Void = {}
+
     @EnvironmentObject private var core: RyujinxController
     @Environment(\.scenePhase) private var scenePhase
     @StateObject private var statistics = StatisticsHandler()
@@ -97,6 +99,9 @@ struct NSDuoPlayView: View {
         }
         .onReceive(NotificationCenter.default.publisher(for: ProcessInfo.thermalStateDidChangeNotification)) { _ in
             NSDuoDiagnostics.recordEnvironment()
+        }
+        .onChange(of: statistics.started) { _, started in
+            if started { onGameReady() }
         }
         .onChange(of: scenePhase) { phase in if phase != .active { releaseInput() } }
         .onDisappear {

@@ -278,7 +278,8 @@ final class NSDuoLibraryStore: ObservableObject {
         }
     }
 
-    func prepareLaunchMetadata(at url: URL, completion: @escaping (Result<GameInfo, Error>) -> Void) {
+    func prepareLaunchMetadata(at url: URL, retainingCovers: Bool = false,
+                               completion: @escaping (Result<GameInfo, Error>) -> Void) {
         beginLaunch { [self] in
             do {
                 let game = try await NSDuoLibraryWorker.run {
@@ -294,7 +295,9 @@ final class NSDuoLibraryStore: ObservableObject {
                     return game
                 }
                 guard !Task.isCancelled else { return }
-                releaseCovers()
+                // Keep the bounded cache until the launch animation hides the
+                // library; the core may already be rendering underneath it.
+                if !retainingCovers { releaseCovers() }
                 completion(.success(game))
             } catch {
                 guard !Task.isCancelled else { return }

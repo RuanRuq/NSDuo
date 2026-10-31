@@ -9,27 +9,31 @@ struct NSDuoRootView: View {
     @State private var failure: String?
     @State private var initialized = false
     @State private var preparedResources = false
+    @State private var launchTransition: NSDuoGameLaunch?
 
     var body: some View {
-        Group {
-            switch core.isRunning {
-            case .started(let game, .none):
-                NSDuoPlayView().id(game.fileURL)
-            case .started(let game, .noJIT):
-                NSDuoJITView(game: game)
-            case .started(_, let state):
-                ContentUnavailableView {
-                    Label("安装权限尚未就绪", systemImage: "signature")
-                } description: {
-                    Text(state == .extendedEntitlement ? "请使用开发签名，并启用 Extended Virtual Addressing。" : "请使用开发签名，并启用 Increased Memory Limit。")
-                } actions: {
-                    Button("返回游戏库") { core.isRunning = .stopped }
+        ZStack {
+            ZStack {
+                destination
+                if showsLibrary {
+                    NSDuoLibraryView(onPlay: selectGame, onPrepare: { showPreparation = true },
+                                     onImportFolder: importFolder, onImportFile: importFile, onLibraryAppear: checkFolders,
+                                     hasPreparedResources: preparedResources)
+                        .disabled(!initialized)
                 }
-            case .stopped, .crashed:
-                NSDuoLibraryView(onPlay: play, onPrepare: { showPreparation = true },
-                                 onImportFolder: importFolder, onImportFile: importFile, onLibraryAppear: checkFolders,
-                                 hasPreparedResources: preparedResources)
-                    .disabled(!initialized)
+            }
+            .allowsHitTesting(launchTransition == nil)
+            .accessibilityHidden(launchTransition != nil)
+            if let launch = launchTransition {
+                NSDuoGameLaunchView(launch: launch, onFadeOut: {
+                    guard launchTransition?.id == launch.id else { return }
+                    launchTransition?.didFadeOut = true
+                    NSDuoLibraryStore.shared.releaseCovers()
+                }, onFinished: {
+                    guard launchTransition?.id == launch.id else { return }
+                    launchTransition = nil
+                }, onCancel: cancelLaunchTransition)
+                .id(launch.id)
             }
         }
         .sheet(isPresented: $showPreparation, onDismiss: {
@@ -39,6 +43,18 @@ struct NSDuoRootView: View {
         }
         .onChange(of: showPreparation) { _, shown in
             NSDuoLibraryStore.shared.setCoverLoadingSuspended(shown)
+            if shown { launchTransition = nil }
+        }
+        .onReceive(NSDuoLibraryStore.shared.$message) { message in
+            if message != nil { launchTransition = nil }
+        }
+        .onChange(of: core.isRunning.isRunning()) { _, running in
+            if !running {
+                switch core.isRunning {
+                case .stopped, .crashed: launchTransition = nil
+                case .started: break
+                }
+            }
         }
         .alert("无法启动", isPresented: Binding(get: { failure != nil }, set: { if !$0 { failure = nil } })) {
             Button("知道了", role: .cancel) { failure = nil }
@@ -63,7 +79,7 @@ struct NSDuoRootView: View {
         .onChange(of: scenePhase) { phase in
             NSDuoDiagnostics.recordEnvironment()
             if phase == .active {
-                if initialized, !showPreparation, !NSDuoLibraryStore.shared.isBusy {
+                if initialized, !showPreparation, launchTransition == nil, !NSDuoLibraryStore.shared.isBusy {
                     switch core.isRunning {
                     case .stopped, .crashed: refreshReadiness()
                     case .started: break
@@ -76,11 +92,81 @@ struct NSDuoRootView: View {
         }
     }
 
+    private var showsLibrary: Bool {
+        switch core.isRunning {
+        case .stopped, .crashed: true
+        case .started: launchTransition?.didFadeOut == false
+        }
+    }
+
+    @ViewBuilder
+    private var destination: some View {
+        switch core.isRunning {
+        case .started(let game, .none):
+            NSDuoPlayView(onGameReady: { revealLaunchDestination(for: game.fileURL) })
+                .id(game.fileURL)
+        case .started(let game, .noJIT):
+            NSDuoJITView(game: game)
+                .onAppear { revealLaunchDestination(for: game.fileURL) }
+        case .started(let game, let state):
+            ContentUnavailableView {
+                Label("安装权限尚未就绪", systemImage: "signature")
+            } description: {
+                Text(state == .extendedEntitlement ? "请使用开发签名，并启用 Extended Virtual Addressing。" : "请使用开发签名，并启用 Increased Memory Limit。")
+            } actions: {
+                Button("返回游戏库") { core.isRunning = .stopped }
+            }
+            .onAppear { revealLaunchDestination(for: game.fileURL) }
+        case .stopped, .crashed:
+            Color.clear
+        }
+    }
+
     private func checkFolders() {
-        guard initialized, !showPreparation, pendingURL == nil, core.verifyKeysFile(path: .keysFolderURL, keys: .prod) else { return }
+        guard initialized, !showPreparation, launchTransition == nil, pendingURL == nil,
+              core.verifyKeysFile(path: .keysFolderURL, keys: .prod) else { return }
         switch core.isRunning {
         case .stopped, .crashed: NSDuoLibraryStore.shared.checkFolders()
         case .started: break // JIT handoff may resume emulation at any moment.
+        }
+    }
+
+    private func selectGame(_ game: NSDuoLibraryGame, sourceFrame: CGRect) {
+        let library = NSDuoLibraryStore.shared
+        guard launchTransition == nil, library.canPrepareLaunch else { return }
+        let launch = NSDuoGameLaunch(title: game.title, cover: library.covers[game.id], sourceFrame: sourceFrame)
+        launchTransition = launch
+        library.prepareForLaunch(game) { url in
+            guard launchTransition?.id == launch.id else { return }
+            // Start on the existing metadata lease while the cover animation
+            // continues above the still-visible library.
+            play(url, launchID: launch.id)
+        }
+    }
+
+    private func startGame(_ game: GameInfo) {
+        if NSDuoIntegratedJIT.shared.isReady { core.startGame(game) }
+        else { core.isRunning = .started(game: game, state: .noJIT) }
+    }
+
+    private func revealLaunchDestination(for url: URL) {
+        guard launchTransition?.destinationURL == url, launchTransition?.isStopping == false else { return }
+        launchTransition?.destinationReady = true
+    }
+
+    private func cancelLaunchTransition() {
+        NSDuoLibraryStore.shared.cancelImport()
+        switch core.isRunning {
+        case .started(_, .none):
+            launchTransition?.isStopping = true
+            // Keep the live Metal view until the emulation thread has stopped.
+            core.stopGame()
+        case .started:
+            core.lastGameLaunched = nil
+            core.isRunning = .stopped
+            launchTransition = nil
+        case .stopped, .crashed:
+            launchTransition = nil
         }
     }
 
@@ -110,19 +196,22 @@ struct NSDuoRootView: View {
             }
         }
     }
-    private func play(_ url: URL) {
+    private func play(_ url: URL, launchID: UUID? = nil) {
         // The library keeps its launch lease until the native read finishes.
-        NSDuoLibraryStore.shared.prepareLaunchMetadata(at: url) { result in
+        NSDuoLibraryStore.shared.prepareLaunchMetadata(at: url, retainingCovers: launchID != nil) { result in
+            guard launchID == nil || launchTransition?.id == launchID else { return }
             switch result {
             case .success(let game):
                 preparedResources = true
-                if NSDuoIntegratedJIT.shared.isReady { core.startGame(game) }
-                else { core.isRunning = .started(game: game, state: .noJIT) }
+                if launchID != nil { launchTransition?.destinationURL = game.fileURL }
+                startGame(game)
             case .failure(NSDuoLaunchMetadata.Failure.resourcesMissing):
                 preparedResources = false
                 pendingURL = url
                 showPreparation = true
-            case .failure(let error): failure = error.localizedDescription
+            case .failure(let error):
+                launchTransition = nil
+                failure = error.localizedDescription
             }
         }
     }
