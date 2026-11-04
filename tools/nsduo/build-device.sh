@@ -50,5 +50,7 @@ import plistlib
 metadata = plistlib.loads(embedded_jit.with_name("Info.plist").read_bytes())
 if metadata.get("NSDuoJITAddressBits") != 64:
     raise SystemExit("打包失败：JIT 组件缺少完整地址修正标记。")
+if metadata.get("NSDuoOnDevicePairing") != 2:
+    raise SystemExit("打包失败：JIT 组件缺少本机首次配对入口。")
 print("已验证：App 内的 JIT 组件与本次修正版本一致。")
 PY

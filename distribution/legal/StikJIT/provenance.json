@@ -24,7 +24,8 @@
     "build": "tools/nsduo/build-stikjit.py",
     "changes": [
       "Preserve all 64 bits of RSP page-write addresses instead of truncating to 9 hex digits.",
-      "Validate every page-write reply and drain each batch before returning a failure."
+      "Validate every page-write reply and drain each batch before returning a failure.",
+      "Add the independently written PairingHostRuntime.swift adapter to the bundled idevice pairable-host API; debugger operations remain in the separate helper."
     ],
     "builtBinaryDigest": ".build/StikJIT/build.json"
   }

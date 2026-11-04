@@ -47,6 +47,10 @@ namespace Ryujinx.Cpu.Signal
         /// </summary>
         public int UnixOldSigaction3Arg;
 
+        // SIGBUS can have a different previous callback on Apple platforms.
+        public nuint UnixOldSigbus;
+        public int UnixOldSigbus3Arg;
+
         /// <summary>
         /// Fixed size array of tracked ranges.
         /// </summary>
@@ -95,13 +99,10 @@ namespace Ryujinx.Cpu.Signal
 
                     if (customSignalHandlerFactory != null)
                     {
-                        _signalHandlerPtr = customSignalHandlerFactory(UnixSignalHandlerRegistration.GetSegfaultExceptionHandler().sa_handler, _signalHandlerPtr);
+                        _signalHandlerPtr = customSignalHandlerFactory(UnixSignalHandlerRegistration.GetSegfaultExceptionHandler().Handler, _signalHandlerPtr);
                     }
 
-                    UnixSignalHandlerRegistration.SigAction old = UnixSignalHandlerRegistration.RegisterExceptionHandler(_signalHandlerPtr);
-
-                    config.UnixOldSigaction = (nuint)(ulong)old.sa_handler;
-                    config.UnixOldSigaction3Arg = old.sa_flags & 4;
+                    UnixSignalHandlerRegistration.RegisterExceptionHandler(_signalHandlerPtr, ConfigureUnixHandlers);
                 }
                 else
                 {
@@ -143,6 +144,16 @@ namespace Ryujinx.Cpu.Signal
         private static unsafe ref SignalHandlerConfig GetConfigRef()
         {
             return ref Unsafe.AsRef<SignalHandlerConfig>((void*)_handlerConfig);
+        }
+
+        private static void ConfigureUnixHandlers(UnixSignalHandlerRegistration.SignalHandlers previous)
+        {
+            ref SignalHandlerConfig config = ref GetConfigRef();
+            config.UnixOldSigaction = (nuint)previous.SegmentationFault.Handler;
+            config.UnixOldSigaction3Arg = previous.SegmentationFault.UsesSigInfo ? 1 : 0;
+            config.UnixOldSigbus = (nuint)previous.BusError.Handler;
+            config.UnixOldSigbus3Arg = previous.BusError.UsesSigInfo ? 1 : 0;
+            Thread.MemoryBarrier();
         }
 
         public static bool AddTrackedRegion(nuint address, nuint endAddress, nint action)

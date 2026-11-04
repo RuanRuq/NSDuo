@@ -69,6 +69,15 @@ namespace Ryujinx.HLE.HOS
                     mode = MemoryManagerMode.SoftwarePageTable;
                 }
 
+                MemoryManagerMode compatibleMode = CpuMemoryCompatibility.Resolve(mode, _titleIdText,
+                    OperatingSystem.IsIOS() && isArm64Host && for64Bit);
+                if (compatibleMode != mode)
+                {
+                    GameDiagnostics.Event($"cpu_compatibility: title_id={_titleIdText}; requested={mode}; effective={compatibleMode}; reason=checked_guest_address");
+                    Logger.Warning?.Print(LogClass.Cpu, $"Using checked host memory for {_titleIdText} on iOS.");
+                    mode = compatibleMode;
+                }
+
                 ICpuEngine cpuEngine = isArm64Host && (mode == MemoryManagerMode.HostMapped || mode == MemoryManagerMode.HostMappedUnsafe) && !context.Device.Configuration.EnableGdbStub
                     ? new LightningJitEngine(_tickSource)
                     : new JitEngine(_tickSource);
@@ -116,6 +125,8 @@ namespace Ryujinx.HLE.HOS
                     default:
                         throw new InvalidOperationException($"{nameof(mode)} contains an invalid value: {mode}");
                 }
+
+                GameDiagnostics.Event($"cpu_context: engine={(cpuEngine is LightningJitEngine ? "LightningJit" : "Jit")}; memory_manager={mode}; host_page_size={MemoryBlock.GetPageSize()}");
             }
 
             DiskCacheLoadState = processContext.Initialize(_titleIdText, _displayVersion, _diskCacheEnabled, _codeAddress, _codeSize, _diskCacheSelector ?? "default");

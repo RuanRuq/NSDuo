@@ -28,7 +28,7 @@ NS Duo aims to simplify everyday use to: **choose a game folder once, then tap i
 | --- | --- |
 | Play again | Keep library entries, local copies and cover art instead of selecting files every time. Rename games and use hold-to-remove protection. |
 | Organize updates and DLC | Discover arbitrarily named subfolders, match content IDs automatically, and check for additions while the source folder remains accessible. |
-| Prepare a session | Use the bundled local VPN and JIT helper from two buttons inside the same app, reducing switches between separate apps. Initial pairing may still require a computer. |
+| Prepare a session | Use the bundled local VPN and JIT helper inside the app. iOS / iPadOS 27+ supports first pairing on the device; older systems can import a computer-generated remote pairing record. |
 | Use the Duo display | Keep the game centered above bottom-mounted touch controls in expanded portrait, use the full game area in landscape, and browse a cover grid. |
 | Avoid repeating compilation work | Reuse shaders and compatible driver pipeline caches, reduce compilation waits between unrelated programs, and preserve resolution and rendering quality. First-time content may still stutter. |
 | Investigate a gameplay issue | Collect diagnostics locally during normal play, then mark, export or clear records when needed, without keeping a computer connected for log capture. |
@@ -42,11 +42,12 @@ These additions focus on everyday workflow and the mobile experience. Compatibil
 - **Persistent library:** import once, tap to launch later; long-press to rename. Removal requires holding a button for five seconds, with border progress and gently increasing haptics.
 - **Automatic cover art:** extract embedded game icons and cache thumbnails, including for existing library entries; show a controller placeholder when no icon is available.
 - **NSZ conversion:** stream-decompress to a cached NSP on first import, with progress and cancellation, without modifying the source.
-- **In-app preparation:** bundled local tunnel and separate JIT helper extensions, exposed as **Connect VPN** and **Enable JIT**, without switching between separate apps.
+- **In-app preparation:** bundled local tunnel and separate JIT helper extensions, exposed as **Connect VPN** and **Enable JIT**. Without a pairing record, the JIT button guides first pairing on iOS / iPadOS 27+.
 - **Duo layout:** the bottom 35% is the virtual controller in expanded portrait. The game viewport fits within 50% of the screen height and is centered in the remaining upper 65%, splitting the extra 15% of black space evenly above and below. Landscape uses the full game area with an external controller. Compact pause/library controls stay at the top right, and buttons other than sticks have subtle haptics.
 - **Simplified Chinese game language by default**, subject to game support.
-- **Shader and driver pipeline caching:** reuse encountered shaders and save driver pipeline caches on orderly shutdown for later launches. Cache validation checks device/driver compatibility. Creation is coordinated per shader program to coalesce duplicate requests and reduce blocking by unrelated background compilation, without reducing resolution or skipping draws. First-time content may still stutter.
-- **Local diagnostics:** automatically record loading, compilation, frame intervals and device state during normal play. Mark issues, export records or clear logs; nothing is uploaded automatically.
+- **Shader and driver pipeline caching:** reuse encountered shaders and attempt to save new pipeline work at intervals of at least one minute when memory headroom permits and no recent memory warning is active, as well as on orderly shutdown. Validate device/driver compatibility and coordinate creation per shader program. Reclaim recreatable textures in bounded batches under memory pressure, avoiding GPU readbacks while paused. Resolution and drawing quality are preserved; first-time content may still stutter.
+- **Phone motion input:** player one uses the phone sensors even with an external controller; other players retain their own controller sensors. The first sample after pause/backgrounding does not integrate rotation across the interruption.
+- **Local diagnostics:** record game activity, core exceptions, uncaught Objective-C exceptions and system-delivered MetricKit crash reports. Select multiple records to export, or clear logs; nothing is uploaded automatically.
 
 ## Usage
 
@@ -55,8 +56,8 @@ The minimum deployment target is **iOS 17.4** for the app, VPN extension and JIT
 ### 1. First-time preparation
 
 1. Build and install with **your own developer account**, following the instructions below, and enable Developer Mode on the device.
-2. Import your own keys, firmware and **this phone's remote pairing record** in the preparation screen. Pairing data is distinct from game keys and from a traditional USB pairing record.
-3. If the phone is not paired, consult upstream [StikDebug](https://github.com/StikDebug/StikDebug) / [StikPair](https://github.com/StikDebug/StikPair) instructions. NS Duo does not include a pairing server; initial pairing may require a computer.
+2. Import your own keys and firmware in the preparation screen. You may also import an existing **remote pairing record for this device**, distinct from game keys and traditional USB pairing records.
+3. On iOS / iPadOS 27+, use the first-time JIT button when no record exists. Allow local-network access and wait for the pairing service to become ready. In Settings → Privacy & Security → Developer Mode, choose **Pair with NS Duo** and enter the **device unlock passcode** first. After verification, return to NS Duo to read its **six-digit pairing code**, then return to Settings and enter that code. Confirm that NS Duo saved the record before continuing. First pairing does not require the VPN; keep the app alive during pairing. Older systems require a computer-generated remote pairing record.
 4. Tap **Connect VPN**, approve the iOS VPN/local-network prompts, then tap **Enable JIT**. Initial developer-image preparation requires internet access; keep the app in the foreground.
 5. Launch after the ready state appears. Other games in the same app process reuse that session. Force-quitting, system termination or a device restart requires preparation again.
 
@@ -89,9 +90,11 @@ Pause retains the running state within the current process. Returning to the lib
 
 ### 4. Review and clear logs
 
-Tap the flag at the top right during play to mark an issue. Later, open the diagnostic logs from the library menu, select a record and export it for analysis. Logs live in the app's `Documents/Diagnostics`, with size rotation and bounded retention; export records you want to keep long-term. Clearing logs removes only local diagnostic records and temporary exports, preserves games and saves, and allows future sessions to continue recording.
+Open diagnostic logs from the library menu, select one, several or all records, and export through the system share sheet, including AirDrop. Logs live in the app’s `Documents/Diagnostics`, with size rotation and bounded retention; export records you want to keep long-term. Clearing logs removes only local diagnostic records and temporary exports, preserves games and saves, and allows future recording.
 
-Long-frame and interrupted-session markers are diagnostic clues, not proof of a root cause or substitutes for full iOS crash reports. See the [regression-check documentation](tools/nsduo/tests/README.md) for coverage and recording limits.
+Core exceptions have separate bounded files, and system reports can include redacted call stacks. MetricKit delivery may be delayed until the app reopens; its reporting period does not identify an exact crash time or game session. System kills and memory exhaustion may leave no stack. Long-frame and interrupted-session markers remain diagnostic clues. See the [regression-check documentation](tools/nsduo/tests/README.md) for coverage and limits.
+
+This source update also corrects the iOS signal ABI and adds a checked-memory compatibility policy for a specific game. It does not establish that the game now runs. This synchronization uses static validation; full builds, JIT and gameplay still require device verification.
 
 ## Build and install
 

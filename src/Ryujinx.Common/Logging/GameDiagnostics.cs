@@ -6,6 +6,7 @@ using System.Linq;
 using System.Text;
 using System.Text.RegularExpressions;
 using System.Threading;
+using System.Threading.Tasks;
 
 namespace Ryujinx.Common.Logging
 {
@@ -13,6 +14,42 @@ namespace Ryujinx.Common.Logging
     public static class GameDiagnostics
     {
         private static DiagnosticSession _session;
+        private static string _exceptionRoot;
+        private static int _exceptionHandlersInstalled;
+
+        public static void InstallExceptionHandlers(string root)
+        {
+            Volatile.Write(ref _exceptionRoot, root);
+            if (Interlocked.Exchange(ref _exceptionHandlersInstalled, 1) != 0) return;
+            AppDomain.CurrentDomain.UnhandledException += (_, args) =>
+            {
+                try { RecordException("unhandled_managed_exception", args.ExceptionObject?.ToString() ?? "Unknown exception", args.IsTerminating); }
+                catch (Exception) { }
+            };
+            TaskScheduler.UnobservedTaskException += (_, args) =>
+            {
+                // Record only: do not change the runtime's exception policy.
+                Exception("unobserved_task_exception", args.Exception);
+            };
+        }
+
+        public static void Exception(string source, Exception error, bool terminating = false)
+        {
+            try { RecordException(source, error?.ToString() ?? "Unknown exception", terminating); }
+            catch (Exception) { /* Reporting must never replace the original failure. */ }
+        }
+
+        private static void RecordException(string source, string details, bool terminating)
+        {
+            try
+            {
+                var session = Volatile.Read(ref _session);
+                if (session != null && session.Exception(source, details, terminating)) return;
+                string root = Volatile.Read(ref _exceptionRoot);
+                if (!string.IsNullOrEmpty(root)) DiagnosticSession.StandaloneException(root, source, details, terminating);
+            }
+            catch (Exception) { /* Best effort, including a full disk or shutdown. */ }
+        }
 
         public static void Start(string root, string title, string settings)
             => Start(root, title, () => settings);
@@ -22,6 +59,7 @@ namespace Ryujinx.Common.Logging
             End();
             try
             {
+                InstallExceptionHandlers(root);
                 // Evaluate optional metadata inside the same failure boundary as IO.
                 var session = new DiagnosticSession(root, title, settings());
                 Volatile.Write(ref _session, session);
@@ -56,6 +94,8 @@ namespace Ryujinx.Common.Logging
         internal const int SegmentLimit = 2 * 1024 * 1024;
         internal const int NormalLimit = 5;
         internal const int ProblemLimit = 10;
+        internal const int ExceptionLimit = 128 * 1024;
+        private const int ExceptionDetailsLimit = 16 * 1024;
         private readonly string _directory;
         private readonly int _segmentLimit;
         private readonly BlockingCollection<string> _queue = new(256);
@@ -73,6 +113,7 @@ namespace Ryujinx.Common.Logging
         private readonly string _started = DateTime.UtcNow.ToString("O");
         private string _title;
         private int _metadataChanged;
+        private readonly object _exceptionLock = new();
 
         internal DiagnosticSession(string root, string title, string settings, int segmentLimit = SegmentLimit)
         {
@@ -134,13 +175,88 @@ namespace Ryujinx.Common.Logging
             Record("problem", message);
         }
 
+        internal bool Exception(string source, string details, bool terminating)
+        {
+            if (Volatile.Read(ref _closed) != 0) return false;
+            Interlocked.Exchange(ref _problem, 1);
+            Record("exception", $"source={source}; terminating={terminating}; details in exception log");
+            // Fatal output uses a separate file, so it never waits for the
+            // sampling writer or an error burst on another thread.
+            if (terminating)
+            {
+                WriteException(_directory, "fatal.log", source, details, true, Volatile.Read(ref _phase));
+            }
+            else
+            {
+                lock (_exceptionLock)
+                    WriteException(_directory, "exceptions.log", source, details, false, Volatile.Read(ref _phase));
+            }
+            return true;
+        }
+
+        internal static void StandaloneException(string root, string source, string details, bool terminating)
+        {
+            string directory = Path.Combine(root, $"{DateTime.UtcNow:yyyyMMdd-HHmmss-fff}-{Guid.NewGuid():N}");
+            Directory.CreateDirectory(directory);
+            WriteException(directory, "fatal.log", source, details, terminating, "outside_game_session");
+            File.WriteAllText(Path.Combine(directory, "info.txt"), $"App 核心异常\n{DateTime.UtcNow:O}\ncore={ReleaseInformation.Version}\n", Encoding.UTF8);
+            // A task may fail without any game running. Bound those records
+            // too, while leaving any concurrently started game untouched.
+            var completed = new DirectoryInfo(root).GetDirectories()
+                .Where(d => !d.Attributes.HasFlag(FileAttributes.ReparsePoint)
+                    && File.Exists(Path.Combine(d.FullName, "info.txt"))
+                    && File.Exists(Path.Combine(d.FullName, "problem"))
+                    && !File.Exists(Path.Combine(d.FullName, "running")))
+                .OrderByDescending(d => d.Name).ToArray();
+            foreach (var old in completed.Skip(ProblemLimit))
+            {
+                try { old.Delete(recursive: true); }
+                catch (Exception e) when (e is IOException or UnauthorizedAccessException) { }
+            }
+        }
+
+        private static void WriteException(string directory, string filename, string source, string details, bool terminating, string phase)
+        {
+            try
+            {
+                details ??= "Unknown exception";
+                bool truncated = details.Length > ExceptionDetailsLimit;
+                if (truncated) details = details[..ExceptionDetailsLimit];
+                string cleaned = string.Join('\n', details.Replace("\r\n", "\n").Split('\n').Select(Clean));
+                string message = $"{DateTime.UtcNow:O}\texception\tsource={Clean(source)}; terminating={terminating}; phase={Clean(phase)}; thread={Environment.CurrentManagedThreadId} ({Clean(Thread.CurrentThread.Name)})\n{cleaned}\n";
+                if (truncated) message += "[exception details truncated]\n";
+                // Preserve the first errors when a core repeatedly reports the
+                // same failure; fatal.log remains available for the final one.
+                using var file = new FileStream(Path.Combine(directory, filename),
+                    terminating ? FileMode.Create : FileMode.Append, FileAccess.Write,
+                    terminating ? FileShare.Read : FileShare.ReadWrite);
+                byte[] bytes = Encoding.UTF8.GetBytes(message);
+                if (file.Length + bytes.Length <= ExceptionLimit)
+                {
+                    file.Write(bytes);
+                    file.Flush(flushToDisk: true);
+                }
+                File.WriteAllText(Path.Combine(directory, "problem"), "Exception/error recorded; inspect the exception log.");
+            }
+            catch (Exception) { /* Optional diagnostics must not throw from a failing thread. */ }
+        }
+
         internal void OnLog(object sender, LogEventArgs args)
         {
-            // GPU compile/cache/errors are relevant; guest/service/access logs can be huge
-            // and may contain user paths or game data, so they are not copied here.
+            // Capture all core Error classes, including CPU/HLE/loader failures.
+            // Keep ordinary verbose output limited to GPU events as before.
+            if (args.Level == LogLevel.Error)
+            {
+                try
+                {
+                    string details = args.Message + (args.Data == null ? "" : "\n" + args.Data);
+                    Exception("core_error", details, terminating: false);
+                }
+                catch (Exception) { }
+                return;
+            }
             if (args.Message?.StartsWith("Gpu ", StringComparison.Ordinal) != true) return;
             if (args.Level is LogLevel.Debug or LogLevel.Trace or LogLevel.Stub) return;
-            if (args.Level == LogLevel.Error) Interlocked.Exchange(ref _problem, 1);
             Record("gpu_" + args.Level, args.Message);
         }
 

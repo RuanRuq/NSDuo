@@ -15,6 +15,7 @@
 #include <stdint.h>
 #include "Models/Options/NativeOptions.h"
 #import "Duo/NSDuoJITExtensionBridge.h"
+#import "Duo/NSDuoPairingBridge.h"
 
 struct GameInfoC {
     long FileSize;

@@ -67,6 +67,28 @@ static class DiagnosticsChecks
             }
             finally { Assembly.SetEntryAssembly(entry); }
 
+            var failureSession = new DiagnosticSession(root, "Failure fixture", "resolution=1");
+            Parallel.For(0, 4000, i => failureSession.Record("burst", "queued event " + i));
+            try
+            {
+                throw new InvalidOperationException("synthetic /private/container/game.nsp token=abcd");
+            }
+            catch (Exception error)
+            {
+                failureSession.Exception("managed_exception", error.ToString(), terminating: true);
+            }
+            // Read before Dispose: a terminating exception must not depend on
+            // draining the asynchronous sampling queue.
+            string fatal = File.ReadAllText(Path.Combine(failureSession.DirectoryPath, "fatal.log"));
+            Check(fatal.Contains(nameof(InvalidOperationException)) && fatal.Contains(nameof(Main)), "exception type and stack are retained immediately");
+            Check(!fatal.Contains("abcd") && !fatal.Contains("/private/container"), "exception details are redacted");
+            failureSession.OnLog(null, new LogEventArgs(LogLevel.Error, TimeSpan.Zero, "CPU", "Cpu synthetic failure"));
+            Check(File.ReadAllText(Path.Combine(failureSession.DirectoryPath, "exceptions.log")).Contains("Cpu synthetic failure"), "non-GPU errors are retained immediately");
+            for (int i = 0; i < 80; i++) failureSession.Exception("burst", new string('x', 8000), false);
+            Check(new FileInfo(Path.Combine(failureSession.DirectoryPath, "exceptions.log")).Length <= DiagnosticSession.ExceptionLimit, "exception bursts are bounded");
+            Check(File.Exists(Path.Combine(failureSession.DirectoryPath, "problem")), "problem marker is persisted before disposal");
+            failureSession.Dispose();
+
             var session = new DiagnosticSession(root, "Test game", "resolution=1", 2048);
             session.Problem("test marker");
             session.Title("Test game named", "1.0");

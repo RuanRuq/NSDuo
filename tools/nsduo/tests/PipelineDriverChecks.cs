@@ -55,6 +55,7 @@ namespace PipelineDriverChecks
         readonly PipelineHolder _pipeline = new();
         readonly object _pipelineCacheSnapshotLock = new();
         long _pipelineCompileCount = 1;
+        long _savedPipelineCompileCount;
         long _pipelineCompileTicks;
         long _pipelineWaitTicks;
         public FakeCacheApi Api = new();

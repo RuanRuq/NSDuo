@@ -16,6 +16,7 @@ using System.Diagnostics;
 using System.Runtime.InteropServices;
 using System.Text.RegularExpressions;
 using System.Threading;
+using System.Threading.Tasks;
 using Format = Ryujinx.Graphics.GAL.Format;
 using PrimitiveTopology = Ryujinx.Graphics.GAL.PrimitiveTopology;
 using Result = Silk.NET.Vulkan.Result;
@@ -62,6 +63,11 @@ namespace Ryujinx.Graphics.Vulkan
         private long _pipelineCompileTicks;
         private long _pipelineWaitTicks;
         private long _lastSlowCompileLog;
+        private long _savedPipelineCompileCount;
+        private long _lastPipelineCacheSnapshot = Stopwatch.GetTimestamp();
+        private long _pipelineCachePressureUntil;
+        private volatile bool _pipelineCacheSnapshotAllowed;
+        private Task _pipelineCacheSnapshotTask = Task.CompletedTask;
 
         internal MemoryAllocator MemoryAllocator { get; private set; }
         internal HostMemoryAllocator HostMemoryAllocator { get; private set; }
@@ -1011,6 +1017,49 @@ namespace Ryujinx.Graphics.Vulkan
         public void PreFrame()
         {
             SyncManager.Cleanup();
+            SchedulePipelineCacheSnapshot();
+        }
+
+        public void UpdateMemoryBudget(ulong availableBytes, bool memoryWarning)
+        {
+            _pipelineCacheSnapshotAllowed = availableBytes >= 512UL * 1024 * 1024;
+            if (memoryWarning)
+            {
+                Volatile.Write(ref _pipelineCachePressureUntil, Stopwatch.GetTimestamp() + 30 * Stopwatch.Frequency);
+            }
+        }
+
+        private void SchedulePipelineCacheSnapshot()
+        {
+            long now = Stopwatch.GetTimestamp();
+            if (_pipelineCacheStorage == null || !_pipelineCacheSnapshotAllowed ||
+                now < Volatile.Read(ref _pipelineCachePressureUntil) ||
+                now - _lastPipelineCacheSnapshot < 60 * Stopwatch.Frequency ||
+                !_pipelineCacheSnapshotTask.IsCompleted ||
+                Volatile.Read(ref _pipelineCompileCount) == Volatile.Read(ref _savedPipelineCompileCount))
+            {
+                return;
+            }
+
+            _lastPipelineCacheSnapshot = now;
+            // A killed iOS process never reaches Dispose. Retain completed compilation
+            // work periodically; serialization and disk IO stay off the render thread.
+            _pipelineCacheSnapshotTask = Task.Run(() =>
+            {
+                try
+                {
+                    // The worker may start after a newly delivered memory warning.
+                    if (!_pipelineCacheSnapshotAllowed || Stopwatch.GetTimestamp() < Volatile.Read(ref _pipelineCachePressureUntil))
+                    {
+                        return;
+                    }
+                    SavePipelineCache(logSummary: false);
+                }
+                catch (Exception error)
+                {
+                    Logger.Warning?.PrintMsg(LogClass.Gpu, $"Driver pipeline checkpoint failed: {error.GetType().Name}.");
+                }
+            });
         }
 
         public ICounterEvent ReportCounter(CounterType type, EventHandler<ulong> resultHandler, float divisor, bool hostReserved)
@@ -1140,20 +1189,28 @@ namespace Ryujinx.Graphics.Vulkan
             }
         }
 
-        private unsafe void SavePipelineCache()
+        private unsafe void SavePipelineCache(bool logSummary = true)
         {
             long count = Volatile.Read(ref _pipelineCompileCount);
-            Logger.Info?.PrintMsg(LogClass.Gpu,
-                $"Pipeline compilation summary: {count} creations, compile={_pipelineCompileTicks * 1000.0 / Stopwatch.Frequency:F1} ms, wait={_pipelineWaitTicks * 1000.0 / Stopwatch.Frequency:F1} ms.");
+            if (logSummary)
+            {
+                Logger.Info?.PrintMsg(LogClass.Gpu,
+                    $"Pipeline compilation summary: {count} creations, compile={_pipelineCompileTicks * 1000.0 / Stopwatch.Frequency:F1} ms, wait={_pipelineWaitTicks * 1000.0 / Stopwatch.Frequency:F1} ms.");
+            }
             if (_pipelineCacheStorage == null || count == 0) return;
 
-            // Called after all compiler workers finish, before the pipeline/device are disposed.
-            // Serializing only at shutdown avoids introducing a new mid-game hitch.
+            // Cache flags are 0: Vulkan synchronizes cache reads/updates internally.
+            // A concurrent compile may grow it between the two queries; retain the last
+            // good file on Incomplete and retry on the next checkpoint or normal exit.
             lock (_pipelineCacheSnapshotLock)
             {
                 nuint size = 0;
                 Result result = Api.GetPipelineCacheData(_device, _pipeline.PipelineCache, ref size, null);
-                if (result != Result.Success || size < 32 || size > PipelineCacheStorage.MaxDataSize) return;
+                if (result != Result.Success || size < 32 || size > PipelineCacheStorage.MaxDataSize)
+                {
+                    Logger.Info?.PrintMsg(LogClass.Gpu, $"Driver pipeline cache snapshot skipped: result={result}, bytes={size}.");
+                    return;
+                }
 
                 byte[] data = new byte[(int)size];
                 fixed (byte* bytes = data)
@@ -1163,9 +1220,14 @@ namespace Ryujinx.Graphics.Vulkan
                 if (result == Result.Success && size <= (nuint)data.Length)
                 {
                     bool saved = _pipelineCacheStorage.Save(data.AsSpan(0, (int)size));
+                    if (saved) Volatile.Write(ref _savedPipelineCompileCount, count);
                     Logger.Info?.PrintMsg(LogClass.Gpu, saved
                         ? $"Saved driver pipeline cache: {size / 1024} KiB."
                         : "Driver pipeline cache was not saved; existing shader cache is unchanged.");
+                }
+                else
+                {
+                    Logger.Info?.PrintMsg(LogClass.Gpu, $"Driver pipeline cache snapshot deferred: result={result}.");
                 }
             }
         }
@@ -1176,6 +1238,10 @@ namespace Ryujinx.Graphics.Vulkan
             {
                 return;
             }
+
+            // The owner has drained rendering before disposal; no new PreFrame can
+            // schedule a checkpoint. Join the current reader before destroying its cache.
+            _pipelineCacheSnapshotTask.GetAwaiter().GetResult();
 
             ShaderCollection[] shaders = new ShaderCollection[Shaders.Count];
             Shaders.CopyTo(shaders);

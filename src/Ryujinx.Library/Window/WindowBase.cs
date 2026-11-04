@@ -235,7 +235,7 @@ namespace Ryujinx.Library
         private void RecordRenderFailure(Exception error)
         {
             Interlocked.CompareExchange(ref _renderFailure, error, null);
-            GameDiagnostics.Problem($"renderer_exception: {error}");
+            GameDiagnostics.Exception("renderer_exception", error);
         }
 
         private void RenderCore()
@@ -278,7 +278,8 @@ namespace Ryujinx.Library
 
                         _chrono.Restart();
 
-                        if (Device.WaitFifo())
+                        bool hadCommands = Device.WaitFifo();
+                        if (hadCommands)
                         {
                             Device.Statistics.RecordFifoStart();
                             Device.ProcessFrame();
@@ -293,6 +294,10 @@ namespace Ryujinx.Library
                                 _ranFirstFrame = true;
                                 SendStatistics(false);
                             }
+                        }
+                        else if (!hadCommands)
+                        {
+                            Device.Gpu.TrimIdleMemory();
                         }
 
                         if (_ticks >= _ticksPerFrame)

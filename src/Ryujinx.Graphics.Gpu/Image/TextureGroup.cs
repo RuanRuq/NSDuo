@@ -99,6 +99,29 @@ namespace Ryujinx.Graphics.Gpu.Image
         private TextureGroupHandle[] _handles;
         private bool[] _loadNeeded;
 
+        // Only used on the GPU owner thread. A paused iOS app may release host
+        // resources, but must not submit readbacks/copies to preserve their contents.
+        internal bool CanEvictWithoutGpuWork
+        {
+            get
+            {
+                if (_incompatibleOverlaps.Count != 0)
+                {
+                    return false;
+                }
+
+                foreach (TextureGroupHandle handle in _handles)
+                {
+                    if (handle.Modified || handle.NeedsCopy || handle.Dependencies.Count != 0)
+                    {
+                        return false;
+                    }
+                }
+
+                return true;
+            }
+        }
+
         /// <summary>
         /// Other texture groups that have incompatible overlaps with this one.
         /// </summary>

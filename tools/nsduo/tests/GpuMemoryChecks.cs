@@ -93,6 +93,7 @@ static class GpuMemoryChecks
             "bounded ticks eventually meet byte budget even below 32 textures");
         memory.Publish(8UL << 30, false, 1);
         pressureCache.ProcessMemoryPressure(memory.Latest, textures[0]);
+        Check((ulong)field.GetValue(pressureCache) <= firstBudget, "warning budget cannot refill immediately after a healthy sample");
         Check((ulong)field.GetValue(pressureCache) <= firstBudget + 64 * MiB, "healthy samples restore budget gradually");
         var shared = new AutoDeleteCache();
         memory.Publish(ulong.MaxValue, false, 2);
@@ -108,7 +109,11 @@ static class GpuMemoryChecks
 
         var reentrantCache = new AutoDeleteCache();
         var neighbors = Enumerable.Range(0, 4).Select(_ => new Texture { Size = 64 * MiB }).ToArray();
-        foreach (var item in neighbors) reentrantCache.Add(item);
+        foreach (var item in neighbors)
+        {
+            item.Group.CanEvictWithoutGpuWork = false;
+            reentrantCache.Add(item);
+        }
         neighbors[0].SkipFlush = false;
         neighbors[0].OnFlush = () => reentrantCache.Remove(neighbors[1], false);
         memory.Publish(0, true, 1);
@@ -116,6 +121,24 @@ static class GpuMemoryChecks
         Check(neighbors[0].References == 0 && neighbors[1].References == 0 && neighbors[2].References == 0 && neighbors[3].References == 1,
             "eviction reloads its cursor after a flush removes the next cached texture");
         Console.WriteLine("PASS memory pressure snapshots/bounded trim/presentation protection/recovery");
+
+        var idleCache = new AutoDeleteCache();
+        var idleTextures = Enumerable.Range(0, 6).Select(_ => new Texture { Size = 64 * MiB }).ToArray();
+        foreach (var item in idleTextures)
+        {
+            item.SkipFlush = false;
+            item.OnFlush = () => throw new Exception("idle trim must never read back from the GPU");
+            idleCache.Add(item);
+        }
+        idleTextures[0].Group.CanEvictWithoutGpuWork = false;
+        idleTextures[1].IncrementReferenceCount(); // Bound/pool-owned texture.
+        var idleBudget = new TextureCacheMemoryBudget();
+        idleBudget.Publish(0, true, 1);
+        for (int tick = 0; tick < 6; tick++)
+            idleCache.ProcessMemoryPressure(idleBudget.Latest, idleTextures[2], allowGpuWork: false);
+        Check(idleTextures[0].References == 1 && idleTextures[1].References == 2 && idleTextures[2].References == 1,
+            "paused trim preserves GPU-owned data, active references and the displayed image");
+        Check(idleTextures.Skip(3).All(item => item.References == 0), "paused trim releases clean cache-only textures without a new frame");
 
         using var scheduler = new BackgroundCompilationScheduler();
         using var gate = new ManualResetEventSlim(false);
@@ -182,6 +205,7 @@ namespace Ryujinx.Graphics.Gpu.Image
         public ShortTextureCacheEntry ShortCacheEntry;
         public TextureGroup Group = new();
         public void IncrementReferenceCount() => References++;
+        public bool HasOneReference() => References == 1;
         public bool DecrementReferenceCount()
         {
             if (--References < 0) throw new Exception("reference underflow");
@@ -191,5 +215,9 @@ namespace Ryujinx.Graphics.Gpu.Image
         public bool CheckModified(bool value) => SkipFlush;
         public void FlushModified(bool value) => OnFlush?.Invoke();
     }
-    sealed class TextureGroup { public void SynchronizeDependents(Texture texture) {} }
+    sealed class TextureGroup
+    {
+        public bool CanEvictWithoutGpuWork = true;
+        public void SynchronizeDependents(Texture texture) {}
+    }
 }

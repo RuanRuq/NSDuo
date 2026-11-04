@@ -9,16 +9,17 @@ final class NSDuoIntegratedJIT: ObservableObject {
     static let shared = NSDuoIntegratedJIT()
 
     enum Phase: Equatable {
-        case idle, needsPairing, importing, connecting, preparing, ready, failed, resetting
+        case idle, needsPairing, pairing, importing, connecting, preparing, ready, failed, resetting
     }
 
     @Published private(set) var phase: Phase = .idle
     @Published private(set) var status = "先连接 VPN，再点击“开启 JIT”。本次运行只需准备一次。"
     @Published private(set) var hasPairing = false
     @Published private(set) var pairingName = ""
+    @Published private(set) var pairingPIN: String?
     @Published private(set) var errorMessage: String?
 
-    var isBusy: Bool { [.importing, .connecting, .preparing, .resetting].contains(phase) }
+    var isBusy: Bool { [.pairing, .importing, .connecting, .preparing, .resetting].contains(phase) }
     var isReady: Bool { verifiedSessionComplete && phase == .ready && RyujinxController.shared.hasPreparedJIT }
 
     private var task: Task<Void, Never>?
@@ -32,11 +33,96 @@ final class NSDuoIntegratedJIT: ObservableObject {
 
     func refreshPairingStatus() {
         hasPairing = (try? NSDuoPairingStore.read()) != nil
-        pairingName = hasPairing ? "本机配对记录已保存" : "尚未导入本机配对记录"
+        pairingName = hasPairing ? "本机配对记录已保存" : "尚未完成本机配对"
         if verifiedSessionComplete, RyujinxController.shared.hasPreparedJIT, !isBusy {
             phase = .ready
             status = "本次运行已就绪，可以直接启动游戏。"
         }
+    }
+
+    /// All devices use the same entry point. First pairing does not need a VPN;
+    /// an existing record follows the separate VPN -> JIT preparation flow.
+    func startJITSetup() {
+        guard !isBusy, !NSDuoJITExtensionBridge.isActive,
+              !NSDuoVPNManager.shared.isConnecting else { return }
+        refreshPairingStatus()
+        if hasPairing { enableJIT() }
+        else { beginPairing() }
+    }
+
+    func beginPairing() {
+        guard !isBusy, !NSDuoJITExtensionBridge.isActive, !NSDuoVPNManager.shared.isConnecting else { return }
+        guard #available(iOS 27, *) else {
+            fail("手机内首次配对需要 iOS 27 或更高版本。当前系统可导入通过电脑生成的远程配对文件，无需安装 StikDebug。")
+            return
+        }
+        guard preflight() else { return }
+        // Do not change identity underneath an already prepared/debugged process.
+        guard !isReady else { return }
+        phase = .pairing
+        pairingPIN = nil
+        errorMessage = nil
+        status = "正在准备本机配对后台任务，请保持 NS Duo 在前台，等待系统连接提示…"
+        task = Task { [weak self] in
+            guard let self else { return }
+            await NSDuoOnDevicePairing.shared.start(progress: { [weak self] stage in
+                guard let self, self.phase == .pairing, self.pairingPIN == nil else { return }
+                switch stage {
+                case "published":
+                    self.status = "配对服务已就绪。请到系统设置 → 隐私与安全性 → 开发者模式，选择与 NS Duo 配对。先输入设备解锁密码，验证通过后返回 App 获取配对码。"
+                case "connected":
+                    self.status = "系统已连接，正在交换配对信息并生成配对码…"
+                case "rejectedPeer":
+                    self.status = "收到的连接无法确认来自本机，请在这台设备的开发者模式中重新选择 NS Duo。"
+                default: break
+                }
+            }, pin: { [weak self] code in
+                guard let self, phase == .pairing else { return }
+                pairingPIN = code
+                status = "设备验证已通过。请回到系统设置的 NS Duo 配对页面，输入下方六位配对码，完成后返回 NS Duo。"
+            }, completion: { [weak self] data, error in
+                guard let self else { NSDuoOnDevicePairing.shared.finish(saved: false); return }
+                if let error {
+                    pairingPIN = nil
+                    NSDuoOnDevicePairing.shared.finish(saved: false)
+                    if error is CancellationError {
+                        phase = .idle
+                        status = "配对已取消，原有配对记录仍保留。"
+                    } else { fail(error.localizedDescription) }
+                    return
+                }
+                guard let data else {
+                    NSDuoOnDevicePairing.shared.finish(saved: false)
+                    fail("系统未返回配对记录，请重新开始。")
+                    return
+                }
+                // Keep the pairing phase/background assertion until the record is durable.
+                pairingPIN = nil
+                phase = .importing
+                status = "配对已确认，正在保存本机配对记录…"
+                task = Task { [self] in
+                    do {
+                        try await Task.detached(priority: .userInitiated) {
+                            try NSDuoPairingStore.save(data)
+                        }.value
+                        self.phase = .idle
+                        self.errorMessage = nil
+                        self.status = "本机配对已完成。请连接 VPN，然后点击“开启 JIT”。"
+                        self.refreshPairingStatus()
+                        NSDuoOnDevicePairing.shared.finish(saved: true)
+                    } catch {
+                        NSDuoOnDevicePairing.shared.finish(saved: false)
+                        self.fail(error.localizedDescription)
+                    }
+                }
+            })
+        }
+    }
+
+    func cancelPairing() {
+        guard phase == .pairing else { return }
+        task?.cancel()
+        NSDuoOnDevicePairing.shared.cancel()
     }
 
     func importPairing(from source: URL) async {
@@ -99,8 +185,13 @@ final class NSDuoIntegratedJIT: ObservableObject {
         let pairingData: Data
         do { pairingData = try NSDuoPairingStore.read() }
         catch {
+            refreshPairingStatus()
             phase = .needsPairing
-            status = "首次使用，请导入这台手机已配好的配对记录。只需一次。"
+            if #available(iOS 27, *) {
+                status = "尚无有效的本机配对记录，请点击“首次开启 JIT”完成配对。已有远程配对文件也可以直接导入。"
+            } else {
+                status = "首次使用，请导入通过电脑为这台手机生成的远程配对文件。"
+            }
             errorMessage = error.localizedDescription
             return
         }
@@ -265,25 +356,37 @@ nonisolated private enum NSDuoPairingStore {
                     throw error("请选择有效的 .plist 或 .mobiledevicepairing 配对文件。")
                 }
                 let data = try Data(contentsOf: source)
-                try validate(data)
-                var directory = url.deletingLastPathComponent()
-                try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
-                var attributes = URLResourceValues()
-                attributes.isExcludedFromBackup = true
-                try directory.setResourceValues(attributes)
-                try data.write(to: url, options: [.atomic, .completeFileProtectionUntilFirstUserAuthentication])
-                try FileManager.default.setAttributes([.posixPermissions: 0o600], ofItemAtPath: url.path)
+                try save(data)
             }
         }
         if let result { return try result.get() }
         throw coordinationError ?? error("无法读取配对文件。")
     }
 
+    static func save(_ data: Data) throws {
+        try validate(data)
+        var directory = url.deletingLastPathComponent()
+        try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true,
+                                               attributes: [.posixPermissions: 0o700])
+        var attributes = URLResourceValues()
+        attributes.isExcludedFromBackup = true
+        try directory.setResourceValues(attributes)
+        // Set permissions before committing, so a permission failure cannot replace a valid record.
+        let staging = directory.appendingPathComponent(UUID().uuidString + ".tmp")
+        defer { try? FileManager.default.removeItem(at: staging) }
+        try data.write(to: staging, options: [.atomic, .completeFileProtectionUntilFirstUserAuthentication])
+        try FileManager.default.setAttributes([.posixPermissions: 0o600], ofItemAtPath: staging.path)
+        let result = staging.path.withCString { source in
+            url.path.withCString { destination in rename(source, destination) }
+        }
+        guard result == 0 else { throw error("无法保存配对记录，请检查设备剩余空间后重试。") }
+    }
+
     private static func validate(_ data: Data) throws {
         guard !data.isEmpty, data.count <= 1_048_576,
               let plist = try PropertyListSerialization.propertyList(from: data, format: nil) as? [String: Any],
               plist["public_key"] != nil else {
-            throw error("这不是新版远程配对记录。请选择此前在 StikDebug 中成功使用的配对文件；不要选择游戏密钥或旧 USB 配对文件。")
+            throw error("这不是有效的远程配对记录。请在本机重新配对，或选择为这台手机生成的远程配对文件。")
         }
     }
 

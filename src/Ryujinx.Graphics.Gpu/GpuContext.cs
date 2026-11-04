@@ -94,6 +94,25 @@ namespace Ryujinx.Graphics.Gpu
             TextureMemoryBudget.Publish(availableBytes, memoryWarning, PhysicalMemoryRegistry.Count);
         }
 
+        private long _lastIdleMemoryTrim;
+
+        public void TrimIdleMemory()
+        {
+            // Run on the GPU owner, including while guest execution is paused. Platform
+            // callbacks only publish the budget; they never mutate live GPU caches.
+            long now = System.Diagnostics.Stopwatch.GetTimestamp();
+            if (TextureMemoryBudget.Latest == null || now - _lastIdleMemoryTrim < System.Diagnostics.Stopwatch.Frequency / 20)
+            {
+                return;
+            }
+
+            _lastIdleMemoryTrim = now;
+            foreach (PhysicalMemory physicalMemory in PhysicalMemoryRegistry.Values)
+            {
+                physicalMemory.TextureCache.TrimIdleMemory();
+            }
+        }
+
         /// <summary>
         /// Support buffer updater.
         /// </summary>

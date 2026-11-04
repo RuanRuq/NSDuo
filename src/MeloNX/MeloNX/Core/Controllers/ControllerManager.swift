@@ -95,6 +95,7 @@ class ControllerManager: ObservableObject {
     private var emulationActive = false
     private var motionEnabled = true
     private var attachedControllerIDs = Set<String>()
+    private var deviceMotionControllerID: String?
 
     func setMotionEnabled(_ enabled: Bool) {
         motionEnabled = enabled
@@ -107,7 +108,10 @@ class ControllerManager: ObservableObject {
         for controller in controllers {
             let selected = attachedControllerIDs.contains(controller.id)
             controller.setRumbleActive(active && selected)
-            controller.setMotionActive(active && selected && motionEnabled)
+            // Player 1 uses the phone's sensors even when buttons come from a physical pad.
+            // Keep other players on their own controllers' sensors.
+            controller.setMotionActive(active && selected && motionEnabled,
+                                       useDeviceMotion: controller.id == deviceMotionControllerID)
         }
     }
 
@@ -133,6 +137,7 @@ class ControllerManager: ObservableObject {
             }
         }
         attachedControllerIDs = Set(selectedControllerIds)
+        deviceMotionControllerID = selectedControllerIds.first
         setEmulationActive(active)
     }
     

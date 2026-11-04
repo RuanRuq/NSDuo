@@ -2,6 +2,12 @@
 <!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
 <plist version="1.0">
 <dict>
+	<key>BGTaskSchedulerPermittedIdentifiers</key>
+	<array><string>$(PRODUCT_BUNDLE_IDENTIFIER).pairing.*</string></array>
+	<key>UIBackgroundModes</key>
+	<array><string>processing</string></array>
+	<key>NSSupportsLiveActivities</key>
+	<true/>
 	<key>CFBundleDocumentTypes</key>
 	<array>
 		<dict/>
@@ -147,9 +153,11 @@
 		</dict>
 	</array>
 	<key>NSLocalNetworkUsageDescription</key>
-	<string>连接本机调试服务以开启游戏 JIT，仅在这台手机上使用配对记录。</string>
+	<string>在这台手机上完成首次调试配对，并连接本机调试服务以开启游戏 JIT。</string>
+	<key>NSMotionUsageDescription</key>
+	<string>使用手机陀螺仪进行游戏体感瞄准和转向，外接手柄连接时也可使用。</string>
 	<key>NSBonjourServices</key>
-	<array><string>_remotepairing._tcp</string></array>
+	<array><string>_remotepairing._tcp</string><string>_remotepairing-pairable-host._tcp</string></array>
 	<key>CFBundleDisplayName</key>
 	<string>NS Duo</string>
 </dict>
