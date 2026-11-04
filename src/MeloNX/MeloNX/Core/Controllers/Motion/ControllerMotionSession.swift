@@ -17,12 +17,14 @@ nonisolated enum NSDuoMotionPreferences {
 nonisolated final class ControllerMotionSession: @unchecked Sendable {
     private let lock = NSLock()
     private var active = false
+    private var useDeviceMotion = false
     private var generation: UInt64 = 0
 
-    func setActive(_ value: Bool) -> UInt64? {
+    func setActive(_ value: Bool, useDeviceMotion: Bool = false) -> UInt64? {
         lock.lock(); defer { lock.unlock() }
-        guard active != value else { return nil }
+        guard active != value || (value && self.useDeviceMotion != useDeviceMotion) else { return nil }
         active = value
+        self.useDeviceMotion = useDeviceMotion
         generation &+= 1
         return generation
     }

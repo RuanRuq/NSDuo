@@ -269,9 +269,10 @@ struct NSDuoPhoneGuide: View {
         NavigationStack {
             List {
                 Section("首次在手机上准备") {
-                    Text("1. 在设置中开启开发者模式。NS Duo 需要开发签名和调试权限。")
-                    Text("2. 在 NS Duo 中导入这台手机的远程配对记录。可以复用此前在 StikDebug 中成功使用的文件；配对记录与游戏密钥是两种不同文件。")
-                    Text("3. 先点击“连接 VPN”，首次允许添加 NS Duo 本地 VPN 和访问本地网络。VPN 连接后，再点击下方“开启 JIT”。不需要打开 LocalDevVPN 或 StikDebug。")
+                    Text("先在设置中开启开发者模式。NS Duo 需要开发签名和调试权限。")
+                    Text("没有配对记录时，在“开启 JIT”的同一位置会显示“首次开启 JIT”。iOS / iPadOS 27 或更高版本按下方步骤完成本机配对；旧系统可导入电脑生成的远程配对文件。")
+                    NSDuoFirstPairingInstructions()
+                    Text("配对期间请勿从多任务中关闭 NS Duo；系统结束任务后可重新发起。首次连接 VPN 时允许添加本地 VPN 配置。不需要安装或打开 StikDebug、LocalDevVPN。")
                 }
                 Section("以后怎么玩") {
                     Text("点击游戏卡片。如果本次运行尚未准备好，先连接 VPN，再开启 JIT，完成后自动启动已选择的游戏；同一 App 进程内无需重复准备。")

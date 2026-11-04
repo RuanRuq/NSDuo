@@ -23,7 +23,7 @@ def block(source, signature):
 
 renderer = (ROOT / 'src/Ryujinx.Graphics.Vulkan/VulkanRenderer.cs').read_text()
 driver_methods = '\n'.join(block(renderer, signature) for signature in [
-    'internal unsafe PipelineCache CreatePipelineCache()', 'private unsafe void SavePipelineCache()'])
+    'internal unsafe PipelineCache CreatePipelineCache()', 'private unsafe void SavePipelineCache(bool logSummary = true)'])
 (OUT / 'PipelineDriverMethods.cs').write_text('using System; using System.Diagnostics; using System.Threading; '
     'using Ryujinx.Graphics.Vulkan;\nnamespace PipelineDriverChecks { sealed partial class Renderer {\n' + driver_methods + '\n} }')
 sources.append(OUT / 'PipelineDriverMethods.cs')

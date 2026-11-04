@@ -61,8 +61,9 @@ namespace Ryujinx.Graphics.Gpu.Image
         private ulong _maxCacheMemoryUsage = DefaultTextureSizeCapacity;
         private ulong _configuredCacheMemoryUsage = DefaultTextureSizeCapacity;
         private TextureCacheMemoryBudget.Sample _memorySample;
+        private long _pressureRecoveryAfter;
         private const ulong MobileMinimumBudget = 64 * 1024 * 1024;
-        private const ulong MobileMemoryReserve = 256 * 1024 * 1024;
+        private const ulong MobileMemoryReserve = 512 * 1024 * 1024;
         private const int MaxPressureRemovalsPerTick = 4;
 
         private readonly LinkedList<Texture> _textures;
@@ -213,7 +214,7 @@ namespace Ryujinx.Graphics.Gpu.Image
 
         // The budget uses a single platform sample, not every frame's free memory.
         // Counting retained textures in the working set avoids a shrinking feedback loop.
-        internal void ProcessMemoryPressure(TextureCacheMemoryBudget.Sample sample, Texture protectedTexture)
+        internal void ProcessMemoryPressure(TextureCacheMemoryBudget.Sample sample, Texture protectedTexture, bool allowGpuWork = true)
         {
             if (sample == null) return;
 
@@ -227,7 +228,14 @@ namespace Ryujinx.Graphics.Gpu.Image
                 ulong target = Math.Clamp(workingSet > reserve ? (workingSet - reserve) / 2 : 0,
                     MobileMinimumBudget, limit);
                 if (sample.Warnings > (_memorySample?.Warnings ?? 0))
+                {
                     target = Math.Min(target, Math.Max(MobileMinimumBudget, _totalSize / 2));
+                    _pressureRecoveryAfter = Stopwatch.GetTimestamp() + 30 * Stopwatch.Frequency;
+                }
+                // iOS warnings can be followed immediately by a large headroom sample.
+                // Keep the reduced budget for a while instead of refilling while backgrounded.
+                if (Stopwatch.GetTimestamp() < _pressureRecoveryAfter)
+                    target = Math.Min(target, _maxCacheMemoryUsage);
                 // Recover gradually after pressure so successive samples cannot refill immediately.
                 if (_memorySample != null && target > _maxCacheMemoryUsage)
                     target = Math.Min(target, _maxCacheMemoryUsage + MobileMinimumBudget);
@@ -243,9 +251,29 @@ namespace Ryujinx.Graphics.Gpu.Image
                 // Never carry a linked-list cursor across an eviction.
                 LinkedListNode<Texture> node = _textures.First;
                 if (node != null && node.Value == protectedTexture) node = node.Next;
+                LinkedListNode<Texture> fallback = node;
+                // Prefer recreatable textures even in the foreground: evicting an old
+                // render target can otherwise stall a frame on a synchronous GPU readback.
+                while (node != null && (node.Value == protectedTexture ||
+                    !node.Value.HasOneReference() || !node.Value.Group.CanEvictWithoutGpuWork))
+                {
+                    node = node.Next;
+                    if (Stopwatch.GetElapsedTime(started).TotalMilliseconds >= 2) return;
+                }
+                bool needsGpuWork = node == null;
+                if (needsGpuWork && allowGpuWork) node = fallback;
                 if (node == null) break;
                 Texture texture = node.Value;
-                RemoveCachedTexture(texture);
+                if (needsGpuWork)
+                {
+                    RemoveCachedTexture(texture);
+                }
+                else
+                {
+                    // Clean, cache-only textures can be recreated from guest memory.
+                    // No synchronization, GPU readback, or short-cache aging while paused.
+                    Remove(texture, flush: false);
+                }
                 removed++;
                 // A single required GPU flush cannot be preempted; do not start more work after 2 ms.
                 if (Stopwatch.GetElapsedTime(started).TotalMilliseconds >= 2) break;

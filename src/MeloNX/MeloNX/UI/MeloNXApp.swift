@@ -50,6 +50,12 @@ func initEnvironmentVariables() {
 class AppDelegate: NSObject, UIApplicationDelegate {
     static var orientationLock = UIInterfaceOrientationMask.all
 
+    func application(_ application: UIApplication,
+                     didFinishLaunchingWithOptions launchOptions: [UIApplication.LaunchOptionsKey: Any]?) -> Bool {
+        NSDuoPairingBackgroundSession.shared.register()
+        return true
+    }
+
     func application(_ application: UIApplication, supportedInterfaceOrientationsFor window: UIWindow?) -> UIInterfaceOrientationMask {
         return AppDelegate.orientationLock
     }
@@ -67,6 +73,7 @@ struct MeloNXApp: App {
     @AppStorage("lastAppversion") var lastAppversion: Data = Data()
     
     init() {
+        NSDuoExceptionCollector.start()
         SDL_SetMainReady()
         SDL_SetiOSEventPump(true)
         configureAudioSession()

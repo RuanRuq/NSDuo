@@ -32,6 +32,36 @@ enum DiagnosticFileChecks {
         check(try fm.contentsOfDirectory(atPath: exports.path).isEmpty)
         check(try Data(contentsOf: sentinel) == Data("preserved".utf8))
 
+        // App reports use the same bounded, allowlisted export as game sessions.
+        let report = try NSDuoDiagnosticFiles.storeAppReport(id: "fixture", title: "App 异常",
+            source: "objc_exception", details: "reason /private/container/game.nsp token=abcd\nframe at App.main",
+            date: Date(timeIntervalSince1970: 100), diagnostics: diagnostics)
+        let first = try Data(contentsOf: report.appendingPathComponent("current.log"))
+        check(String(decoding: first, as: UTF8.self).contains("App.main"))
+        check(!String(decoding: first, as: UTF8.self).contains("abcd"))
+        let repeated = try NSDuoDiagnosticFiles.storeAppReport(id: "fixture", title: "App 异常",
+            source: "objc_exception", details: "duplicate", date: Date(timeIntervalSince1970: 100), diagnostics: diagnostics)
+        let repeatedData = try Data(contentsOf: report.appendingPathComponent("current.log"))
+        check(repeated == report && repeatedData == first)
+        check(fm.fileExists(atPath: report.appendingPathComponent("problem").path))
+        try Data("managed stack".utf8).write(to: report.appendingPathComponent("fatal.log"))
+        try Data("core error".utf8).write(to: report.appendingPathComponent("exceptions.log"))
+        try Data("never export this".utf8).write(to: report.appendingPathComponent("private.key"))
+        let record = NSDuoDiagnosticRecord(directory: report, title: "App 异常", date: Date(), hasProblem: true, unfinished: false)
+        let exported = try NSDuoDiagnosticFiles.export([record], exports: exports)
+        let exportedText = String(decoding: try Data(contentsOf: exported), as: UTF8.self)
+        check(exportedText.contains("managed stack") && exportedText.contains("core error"))
+        check(!exportedText.contains("never export this"))
+        let systemReport = try NSDuoDiagnosticFiles.storeAppReport(id: "system-fixture", title: "系统报告",
+            source: "metrickit_crash", details: "summary", report: Data(#"{"token":"secret-value","stack":"App.main"}"#.utf8), diagnostics: diagnostics)
+        let systemText = String(decoding: try Data(contentsOf: systemReport.appendingPathComponent("system-crash.json")), as: UTF8.self)
+        check(!systemText.contains("secret-value") && systemText.contains("App.main"))
+        do {
+            _ = try NSDuoDiagnosticFiles.storeAppReport(id: "../escape", title: "App 异常",
+                source: "fixture", details: "", diagnostics: diagnostics)
+            fatalError("Report IDs must not escape the diagnostic root")
+        } catch is CocoaError { }
+
         // Root directories survive, so the next recording can write normally.
         let next = diagnostics.appendingPathComponent("next-session", isDirectory: true)
         try fm.createDirectory(at: next, withIntermediateDirectories: true)

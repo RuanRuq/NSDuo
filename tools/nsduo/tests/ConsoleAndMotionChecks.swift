@@ -47,6 +47,15 @@ import Darwin
         precondition(NSDuoMotionPreferences.isEnabled(titleID: "OTHER", defaults: defaults))
         NSDuoMotionPreferences.setEnabled(true, titleID: "abcd", defaults: defaults)
         precondition(NSDuoMotionPreferences.isEnabled(titleID: "ABCD", defaults: defaults))
+        let session = ControllerMotionSession()
+        let controllerGeneration = session.setActive(true)!
+        precondition(session.withActive(controllerGeneration) {})
+        let phoneGeneration = session.setActive(true, useDeviceMotion: true)!
+        precondition(!session.withActive(controllerGeneration) {}, "switching sources rejects queued external-controller samples")
+        precondition(session.withActive(phoneGeneration) {})
+        precondition(session.setActive(true, useDeviceMotion: true) == nil)
+        _ = session.setActive(false)
+        precondition(!session.withActive(phoneGeneration) {}, "pause rejects queued phone samples")
         print("PASS: console rotation, descriptor restoration, repeated sessions, symlink rejection and per-game motion preferences")
     }
 }

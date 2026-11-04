@@ -11,15 +11,17 @@ import GameController
 import UIKit
 
 extension BaseController {
-    func setMotionActive(_ active: Bool) {
-        guard let generation = motionSession.setActive(active && isActive) else { return }
+    func setMotionActive(_ active: Bool, useDeviceMotion: Bool = false) {
+        guard let generation = motionSession.setActive(active && isActive, useDeviceMotion: useDeviceMotion) else { return }
         motionQueue.async { [weak self] in
             guard let self else { return }
             if active && self.isActive {
                 self.motionSession.withActive(generation) {
+                    self.stopMotion()
                     self.lastAccel = SIMD3(repeating: .nan)
                     self.lastGyro = SIMD3(repeating: .nan)
-                    self.setupMotion(generation: generation)
+                    self.motionErrorReported = false
+                    self.setupMotion(generation: generation, useDeviceMotion: useDeviceMotion)
                 }
             } else {
                 self.stopMotion()
@@ -33,8 +35,8 @@ extension BaseController {
         }
     }
 
-    private func setupMotion(generation: UInt64) {
-        if let nativeController, nativeController.motion != nil, !self.usesDeviceHandlers {
+    private func setupMotion(generation: UInt64, useDeviceMotion: Bool) {
+        if !useDeviceMotion, let nativeController, nativeController.motion != nil, !self.usesDeviceHandlers {
             nativeController.motion?.sensorsActive = true
             
             // Thank you @BXYMartin :3
@@ -53,14 +55,30 @@ extension BaseController {
                 let accel = SIMD3(-rawAccelX, -rawAccelZ, rawAccelY)
                 let gyro = SIMD3(rawGyroDeg.x, rawGyroDeg.z, -rawGyroDeg.y)
 
-                self.submitMotion(accelerometer: accel, gyroscope: gyro, generation: generation)
+                self.submitMotion(accelerometer: accel, gyroscope: gyro, generation: generation, source: 2)
             }
         } else {
-            guard self.motionManager.isDeviceMotionAvailable else { return }
+            guard self.motionManager.isDeviceMotionAvailable else {
+                NSDuoDiagnostics.recordMotion(source: 1, state: -1)
+                print("NSDuo motion: phone device motion unavailable")
+                return
+            }
 
             self.motionManager.deviceMotionUpdateInterval = 1.0 / 60.0 // 60Hz
-            self.motionManager.startDeviceMotionUpdates(to: self.motionOperation) { [weak self] (data, error) in
-                guard let self = self, let m = data else { return }
+            // Relative attitude needs no compass. Serialize callbacks with native submissions
+            // so rotation samples cannot overtake one another under rendering load.
+            self.motionManager.startDeviceMotionUpdates(using: .xArbitraryZVertical, to: self.motionOperation) { [weak self] (data, error) in
+                guard let self else { return }
+                if error != nil {
+                    self.motionSession.withActive(generation) {
+                        if !self.motionErrorReported {
+                            self.motionErrorReported = true
+                            NSDuoDiagnostics.recordMotion(source: 1, state: -2)
+                        }
+                    }
+                    return
+                }
+                guard let m = data else { return }
 
                 let rawAccel = SIMD3<Float>(
                     -Float(m.gravity.x + m.userAcceleration.x),
@@ -75,7 +93,7 @@ extension BaseController {
                 ) * (180.0 / .pi)
 
                 let (mappedAccel, mappedGyro) = self.remapToSwitchCoords(accel: rawAccel, gyro: rawGyro)
-                self.submitMotion(accelerometer: mappedAccel, gyroscope: mappedGyro, generation: generation)
+                self.submitMotion(accelerometer: mappedAccel, gyroscope: mappedGyro, generation: generation, source: 1)
             }
         }
     }
@@ -89,8 +107,10 @@ extension BaseController {
         }
     }
 
-    private func submitMotion(accelerometer: SIMD3<Float>, gyroscope: SIMD3<Float>, generation: UInt64) {
-        guard isActive else { return }
+    private func submitMotion(accelerometer: SIMD3<Float>, gyroscope: SIMD3<Float>, generation: UInt64, source: Int32) {
+        guard isActive,
+              accelerometer.x.isFinite, accelerometer.y.isFinite, accelerometer.z.isFinite,
+              gyroscope.x.isFinite, gyroscope.y.isFinite, gyroscope.z.isFinite else { return }
         
         let pointer = self.pointer
         
@@ -98,6 +118,7 @@ extension BaseController {
             guard let self, self.isActive else { return }
             self.motionSession.withActive(generation) {
                 guard self.lastAccel != accelerometer || self.lastGyro != gyroscope else { return }
+                if self.lastAccel.x.isNaN { NSDuoDiagnostics.recordMotion(source: source, state: 1) }
                 self.lastAccel = accelerometer
                 self.lastGyro = gyroscope
                 Ryujinx.setGamepadMotionSample(pointer, accelerometer: accelerometer, gyroscope: gyroscope)

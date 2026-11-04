@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Rebuild the pinned StikJIT framework with NS Duo's address/reply fix.
+"""Rebuild pinned StikJIT with NS Duo's address fix and first-pairing adapter.
 
 All inputs are local. Called before Xcode plans its framework copy/sign steps.
 No global packages, network downloads, simulator builds or signing are needed.
@@ -46,8 +46,9 @@ def main():
             metadata = plistlib.loads((DEST / "Info.plist").read_bytes())
             if (stamp.get("inputs") == signature and
                     stamp.get("binary") == digest(DEST / "StikJIT") and
-                    metadata.get("NSDuoJITAddressBits") == 64):
-                print("StikJIT 地址修复已就绪。")
+                    metadata.get("NSDuoJITAddressBits") == 64 and
+                    metadata.get("NSDuoOnDevicePairing") == 2):
+                print("StikJIT 地址修复与本机配对组件已就绪。")
                 return
 
         source = BUILD / "source"
@@ -64,6 +65,7 @@ def main():
         modules.mkdir(parents=True)
         metadata = plistlib.loads((DEST / "Info.plist").read_bytes())
         metadata["NSDuoJITAddressBits"] = 64
+        metadata["NSDuoOnDevicePairing"] = 2
         (framework / "Info.plist").write_bytes(plistlib.dumps(metadata))
         for resource in (source / "Resources").iterdir():
             if resource.is_file():
@@ -85,6 +87,8 @@ def main():
         command.extend([str(p) for p in sorted((source / "Sources").glob("*.swift"))])
         command.extend(["-o", str(framework / "StikJIT")])
         subprocess.run(command, check=True)
+        if "_OBJC_CLASS_$_NSDuoPairingRuntime" not in run("nm", "-gU", str(framework / "StikJIT")):
+            raise SystemExit("本机首次配对入口未导出，不能打包此 JIT 组件。")
         # swiftc places its dSYM beside the output executable, inside this bundle.
         # Keep symbols for diagnostics outside the framework: Xcode otherwise
         # tries to strip them as an embedded runtime binary during its copy step.
@@ -103,7 +107,7 @@ def main():
         shutil.copytree(framework, DEST, dirs_exist_ok=True)
         stamp_path.write_text(json.dumps({"inputs": signature,
                                          "binary": digest(DEST / "StikJIT")}, indent=2))
-        print("已生成支持完整 64 位地址、逐页校验响应的 StikJIT。")
+        print("已生成支持本机首次配对、完整 64 位地址和逐页校验响应的 StikJIT。")
 
 
 if __name__ == "__main__":

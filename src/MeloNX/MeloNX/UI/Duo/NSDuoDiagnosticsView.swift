@@ -19,8 +19,9 @@ struct NSDuoDiagnosticsView: View {
         NavigationStack {
             List {
                 Section {
-                    Text("日常游玩时自动记录运行情况，无需额外操作。日志保存在手机本地，之后可导出分析。")
-                    Text("保留最近 5 次普通记录和 10 次问题记录。每次最多约 4 MB，旧记录会轮换；需要长期保存时请导出到“文件”。")
+                    Text("自动记录游戏运行、核心异常和 App 异常，日志保存在手机本地，可导出分析。")
+                    Text("系统崩溃报告可能在重新打开 App 后延迟出现；系统强制结束不一定有异常堆栈。")
+                    Text("保留最近 5 次普通记录和 10 次问题记录。每份最多约 5 MB，旧记录会轮换；需要长期保存时请导出到“文件”。")
                 }.font(.footnote).foregroundStyle(.secondary)
                 if let exported {
                     Section("导出已准备好") {
@@ -30,7 +31,7 @@ struct NSDuoDiagnosticsView: View {
                 Section("运行记录") {
                     if loading { ProgressView("正在读取…") }
                     else if records.isEmpty {
-                        Text(cleared ? "日志已清除，后续游玩会继续自动记录。" : "运行一次游戏后，这里会出现记录。")
+                        Text(cleared ? "日志已清除，后续会继续自动记录。" : "运行游戏或收集到异常报告后，这里会出现记录。")
                             .foregroundStyle(.secondary)
                     }
                     if !records.isEmpty {
@@ -109,6 +110,7 @@ struct NSDuoDiagnosticsView: View {
                 Text("清除后无法恢复。后续游玩会继续自动记录，不影响游戏和存档。")
             }
             .task {
+                await NSDuoExceptionCollector.shared.flushPendingReports()
                 do { records = try await Task.detached(priority: .utility) { try NSDuoDiagnosticFiles.records() }.value }
                 catch { failure = "无法读取日志：\(error.localizedDescription)" }
                 loading = false

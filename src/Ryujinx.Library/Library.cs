@@ -112,13 +112,13 @@ namespace Ryujinx.Library
                 OptionsNativeHelper.Free(nativeOptions);
                 GameDiagnostics.Start(Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.MyDocuments), "Diagnostics"),
                     Path.GetFileName(managed.InputPath),
-                    () => $"core={ReleaseInformation.Version}; os={Environment.OSVersion.VersionString}; model={managed.DeviceModel}; resolution={managed.ResScale}; backend={managed.GraphicsBackend}; threading={managed.BackendThreading}; shader_cache={!managed.DisableShaderCache}; async_shader={managed.EnableAsyncShaderCompilation}; texture_recompression={managed.EnableTextureRecompression}");
+                    () => $"core={ReleaseInformation.Version}; os={Environment.OSVersion.VersionString}; model={managed.DeviceModel}; resolution={managed.ResScale}; backend={managed.GraphicsBackend}; threading={managed.BackendThreading}; shader_cache={!managed.DisableShaderCache}; async_shader={managed.EnableAsyncShaderCompilation}; texture_recompression={managed.EnableTextureRecompression}; configured_memory_manager={managed.MemoryManagerMode}");
                 lock (inputConfigurationLock) { GameDiagnostics.Pause(_pauseRequested); }
                 Load(managed);
             }
             catch (Exception e)
             {
-                GameDiagnostics.Problem($"managed_exception: {e}");
+                GameDiagnostics.Exception("managed_exception", e);
                 Console.WriteLine(e.ToString());
                 return -1;
             }
@@ -143,6 +143,7 @@ namespace Ryujinx.Library
         [UnmanagedCallersOnly(EntryPoint = "initialize")]
         public static unsafe void Initialize()
         {
+            GameDiagnostics.InstallExceptionHandlers(Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.MyDocuments), "Diagnostics"));
             AppDataManager.Initialize(Environment.GetFolderPath(Environment.SpecialFolder.MyDocuments));
 
             Silk.NET.Core.Loader.SearchPathContainer.Platform = Silk.NET.Core.Loader.UnderlyingPlatform.MacOS;
@@ -259,6 +260,16 @@ namespace Ryujinx.Library
         public static void UpdateTextureMemoryBudget(ulong availableBytes, int memoryWarning)
         {
             _emulationContext?.Gpu.UpdateTextureMemoryBudget(availableBytes, memoryWarning != 0);
+            IRenderer renderer = _emulationContext?.Gpu.Renderer;
+            if (renderer is ThreadedRenderer threaded) renderer = threaded.BaseRenderer;
+            if (renderer is VulkanRenderer vulkan) vulkan.UpdateMemoryBudget(availableBytes, memoryWarning != 0);
+            GameDiagnostics.Event($"memory: available_mb={availableBytes / (1024 * 1024)}; warning={memoryWarning}");
+        }
+
+        [UnmanagedCallersOnly(EntryPoint = "nsduo_diagnostics_motion")]
+        public static void DiagnosticMotion(int source, int state)
+        {
+            GameDiagnostics.Event($"motion: source={(source == 1 ? "phone" : "controller")}; state={state}");
         }
 
         [UnmanagedCallersOnly(EntryPoint = "load_keyset")]
@@ -855,19 +866,6 @@ namespace Ryujinx.Library
             Logger.SetEnable(LogLevel.Guest, !option.LoggingDisableGuest);
             Logger.SetEnable(LogLevel.AccessLog, option.LoggingEnableFsAccessLog);
 
-
-            AppDomain.CurrentDomain.UnhandledException += (sender, e) =>
-            {
-                var ex = e.ExceptionObject as Exception;
-                var trace = new System.Diagnostics.StackTrace(ex, true);
-                var frame = trace.GetFrame(0);
-                var file = frame?.GetFileName();
-                var line = frame?.GetFileLineNumber();
-
-                Logger.Info?.Print(LogClass.Application,
-                    $"Unhandled exception: {ex}\nFile: {file}\nLine: {line}");
-
-            };
 
             if (OperatingSystem.IsMacOS() || OperatingSystem.IsIOS())
             {

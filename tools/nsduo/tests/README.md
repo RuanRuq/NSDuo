@@ -65,6 +65,18 @@ The contention regression holds one program inside a fake driver call and requir
 
 ## 本地诊断检查 / Local diagnostic checks
 
+### iOS CPU 信号接口静态检查
+
+```sh
+python3 tools/nsduo/tests/check-signal-abi.py
+```
+
+读取实际 C# 的 Darwin `sigaction` 字段与 `SA_SIGINFO` 常量，对照本机 iPhoneOS SDK 做 Clang 静态断言，并核对生成信号回调与托管配置的偏移、读取宽度。只使用 `-fsyntax-only`，不编译 App/核心或运行测试程序。输出留在 `work/signal-abi-checks`；可用 `NSDUO_DEVELOPER_DIR` 选择已有 Xcode。
+
+2026-11-03 修正了 iOS 错用 Linux 信号结构和常量、两个内存信号共用旧回调、32 位参数标志被按 64 位读取的问题。`SIGSEGV` / `SIGBUS` 现在分别保存和转发旧回调，安装前先发布回调配置；静态检查不能替代真实 JIT、内存保护和游戏兼容性验证。
+
+2026-11-03 后续真机报告确认《超级马力欧银河》1.3.1 仍在未受检的原生页表索引处崩溃。原始 `.ips` 的寄存器可精确复现越界地址：`0x7389e78000 + (0x1f9000fe200ff1 >> 12) * 8 = 0x103b8a669000`。该 title `010099C022B96000` 在 iOS ARM64 的 64 位进程中，将运行时 `HostMappedUnsafe` 改为 `HostMapped`，保留 LightningJit；另外修正 HostTracked 受检路径，使索引与 PTE 相对地址均使用裁剪到 guest 地址空间位宽后的值。兼容策略不写回配置文件，诊断记录配置值和实际模式。`CpuMemoryCompatibilityChecks.cs` 包含平台/title/大小写/显式配置边界用例；当前仅静态语义验证，未执行回归或验证实际游戏恢复。
+
 ```sh
 python3 tools/nsduo/tests/run-diagnostics-checks.py
 ```
@@ -75,11 +87,17 @@ python3 tools/nsduo/tests/run-diagnostics-checks.py
 
 同时编译实际 Swift 日志文件操作，验证清除范围、符号链接处理、游戏/存档保留、重复清除、清除后可再次写入，以及异常路径。日志页面的“清除日志”需要确认，只删除本机诊断记录和临时导出文件，之后继续自动记录。已保存到“文件”或其他位置的日志副本不受影响。
 
-运行记录自动存于手机 `Documents/Diagnostics`。每次运行日志正文最多约 4 MiB；正常结束后保留最近 5 次普通记录和 10 次问题记录。游戏内左上角仅保留暂停和返回游戏库按钮；游戏库菜单的“诊断日志”可选择记录，再分享或存储为文本。没有自动上传；需要长期保留的记录应主动导出。
+异常收集新增用例覆盖：采样消息拥塞时异常仍独立同步落盘、异常类型与堆栈保留、非 GPU Error、问题标记立即写入、异常突发大小上限、App 报告去重、JSON 脱敏和导出白名单。上述主机回归需要编译并执行测试程序，日常只做静态验证时不运行。
 
-日志包含核心初始化阶段、GPU 编译与等待信息、呈现帧间隔、核心统计、托管内存、温度状态、低电量模式、前后台及内存警告。无新画面也可能是游戏正常加载；未正常结束也可能是强制退出或系统终止，不能单凭这些标记判定根因。日志不是完整 iOS 崩溃报告，也不会记录从未触发的游戏内容。进程突然终止时，最后约一秒或尚未处理的队列内容可能丢失。
+运行记录自动存于手机 `Documents/Diagnostics`。每次运行采样正文最多约 4 MiB，另外两个异常文件各最多 128 KiB；正常结束后保留最近 5 次普通记录和 10 次问题记录。游戏内左上角仅保留暂停和返回游戏库按钮；游戏库菜单的“诊断日志”可选择记录，再分享或存储为文本。没有自动上传；需要长期保留的记录应主动导出。
 
-The diagnostic checks compile the production recorder with synthetic events and controlled timestamps. They verify frame stalls, pause/resume, queue and file limits, retention, interrupted-session markers, redaction and I/O failure. Device sessions are stored locally under `Documents/Diagnostics`; the library's diagnostic menu exports an allowlisted text report. The in-game controls at the top left provide pause and return-to-library actions. There is no automatic upload. Logs retain roughly 4 MiB per session, with five ordinary and ten problem sessions after clean shutdown. No-frame and interrupted-session markers are clues, not proof of a crash or its cause. Abrupt termination may lose the last buffered events; iOS crash reports may still be needed.
+日志包含核心初始化阶段、GPU 编译与等待信息、呈现帧间隔、核心统计、托管内存、温度状态、低电量模式、前后台及内存警告。核心捕获的启动/渲染异常和各模块 Error 写入 `exceptions.log`；全局未处理的终止异常写入 `fatal.log`，包含时间、阶段、线程和经脱敏的堆栈。异常文件独立同步刷盘，不等待采样队列；最多保留约 16 Ki 个字符的异常详情，突发写满时保留最先记录的错误，终止异常另存。全局 AppDomain/TaskScheduler 处理器只注册一次，不改变异常处理策略。
+
+App 初始化时还注册 Objective-C 未捕获异常回调，并通过 MetricKit 接收系统原生崩溃报告；不接管 JIT 和内存保护使用的信号处理器。这两类报告显示为独立的“App 未捕获异常”或“App 系统崩溃报告”，和游戏记录一样可选择导出。系统报告附带经脱敏的 `system-crash.json`（最多 2 MiB；超限保留摘要并注明），包含系统提供的异常类型、信号、终止原因和调用栈。系统报告可能在重启 App 后延迟交付；列表时间是报告统计区间的结束时间，并非精确崩溃时刻，不据此强行归到某一局游戏。已接收报告的摘要 ID 保存在 UserDefaults，避免重复交付或清日志后重新导入历史报告。
+
+无新画面也可能是游戏正常加载；未正常结束也可能是强制退出或系统终止，不能单凭这些标记判定根因。原生收集属于尽力记录，系统强杀、内存耗尽、栈溢出等情况不保证执行回调或交付堆栈；不会伪造具体原因。进程突然终止时，最后约一秒或尚未处理的采样队列内容仍可能丢失，必要时继续使用 iOS `.ips`/Jetsam 报告。
+
+The diagnostic checks compile the production recorder with synthetic events and controlled timestamps. They verify frame stalls, pause/resume, queue and file limits, retention, interrupted-session markers, redaction and I/O failure. Device sessions are stored locally under `Documents/Diagnostics`; the library's diagnostic menu exports an allowlisted text report. The in-game controls at the top left provide pause and return-to-library actions. There is no automatic upload. Sampling logs retain roughly 4 MiB per session, plus two bounded synchronous exception files, with five ordinary and ten problem sessions after clean shutdown. Objective-C uncaught exceptions and MetricKit crash reports become separate exportable records. MetricKit delivery may be delayed, and its reporting period does not identify one game session. No-frame and interrupted-session markers are clues, not proof of a crash or its cause. Abrupt termination may lose buffered sampling events; system kills may not provide an in-app stack and iOS crash reports may still be needed.
 
 The Swift file checks also exercise scoped clearing, symlinks, preserved game/save fixtures, repeated clearing, subsequent recording and error handling. The diagnostic page confirms before deleting its local records and temporary exports. Recording continues during future play; copies saved elsewhere remain untouched.
 

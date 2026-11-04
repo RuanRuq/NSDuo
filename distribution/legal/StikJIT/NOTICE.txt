@@ -14,6 +14,12 @@ build entry point is tools/nsduo/build-stikjit.py. NS Duo also supplies the
 missing framework Info.plist using upstream project.yml metadata. The helper
 and IPC bridge are NSDuo integration code; no Husk implementation was copied.
 
+NS Duo additionally provides PairingHostRuntime.swift, an independently written
+adapter to the bundled idevice pairable-host API for iOS 27+ first pairing.
+The adapter is at tools/nsduo/stikjit/PairingHostRuntime.swift. The host loads
+only this pairing entry point on demand; debugger operations remain in the
+separate helper. No StikPair application source was copied or bundled.
+
 Bundled idevice FFI is by Jackson Coxson and contributors:
 https://github.com/jkcoxson/idevice (MIT).
 The StikJIT release does not identify the exact revision of its bundled idevice

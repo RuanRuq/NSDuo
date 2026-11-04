@@ -47,6 +47,7 @@ namespace Ryujinx.Graphics.Gpu.Image
         private OverlapInfo[] _overlapInfo;
 
         private readonly AutoDeleteCache _cache;
+        private Texture _lastPresentedTexture;
 
         /// <summary>
         /// Constructs a new instance of the texture manager.
@@ -1437,8 +1438,14 @@ namespace Ryujinx.Graphics.Gpu.Image
         /// </summary>
         public void Tick(Texture protectedTexture)
         {
+            _lastPresentedTexture = protectedTexture;
             _cache.ProcessShortCache(protectedTexture);
             _cache.ProcessMemoryPressure(_context.TextureMemoryBudget.Latest, protectedTexture);
+        }
+
+        internal void TrimIdleMemory()
+        {
+            _cache.ProcessMemoryPressure(_context.TextureMemoryBudget.Latest, _lastPresentedTexture, allowGpuWork: false);
         }
 
         /// <summary>

@@ -33,6 +33,7 @@ class BaseController: Equatable, Identifiable {
     let motionOperation = OperationQueue()
     var lastAccel = SIMD3<Float>(repeating: 0)
     var lastGyro = SIMD3<Float>(repeating: 0)
+    var motionErrorReported = false
     let filterAlpha: Float = 0.05
     
     private var rumbleController: RumbleController?
@@ -71,7 +72,11 @@ class BaseController: Equatable, Identifiable {
         let queueLabel = self.virtual ? "com.stossy11.MeloNX.controller.virtual" : "com.stossy11.MeloNX.controller.\(identifier)"
         
         self.inputQueue = DispatchQueue(label: queueLabel, qos: .userInteractive)
-        self.motionQueue = DispatchQueue(label: queueLabel + ".motion", qos: .background)
+        self.motionQueue = DispatchQueue(label: queueLabel + ".motion", qos: .userInteractive)
+        self.motionOperation.name = queueLabel + ".sensors"
+        self.motionOperation.maxConcurrentOperationCount = 1
+        self.motionOperation.qualityOfService = .userInteractive
+        self.motionOperation.underlyingQueue = self.motionQueue
         
         setupController()
     }

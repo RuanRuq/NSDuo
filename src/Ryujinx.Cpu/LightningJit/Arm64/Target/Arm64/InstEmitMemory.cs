@@ -550,12 +550,16 @@ namespace Ryujinx.Cpu.LightningJit.Arm64.Target.Arm64
 
                 Operand pte = new(tempRegister, RegisterType.Integer, OperandType.I64);
 
-                asm.Lsr(pte, guestAddress, new Operand(OperandKind.Constant, OperandType.I32, 12));
-
                 if (mmType == MemoryManagerType.HostTracked)
                 {
-                    asm.And(pte, pte, new Operand(OperandKind.Constant, OperandType.I64, ulong.MaxValue >> (64 - (asBits - 12))));
+                    // Both the page-table index and the final PTE-relative
+                    // address must use the same normalized guest address.
+                    // Masking only the index adds the high bits back below.
+                    asm.And(destination, guestAddress, new Operand(OperandKind.Constant, OperandType.I64, ulong.MaxValue >> (64 - asBits)));
+                    guestAddress = destination;
                 }
+
+                asm.Lsr(pte, guestAddress, new Operand(OperandKind.Constant, OperandType.I32, 12));
 
                 asm.LdrRr(pte, basePointer, pte, ArmExtensionType.Uxtx, true);
                 asm.Add(destination, pte, guestAddress);

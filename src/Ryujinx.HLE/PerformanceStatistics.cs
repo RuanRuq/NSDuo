@@ -140,8 +140,16 @@ namespace Ryujinx.HLE
         {
             double currentFrameTime = PerformanceCounter.ElapsedTicks * _ticksToSeconds;
             double elapsedFrameTime = currentFrameTime - _previousFrameTime[frameType];
+            bool hasPreviousFrame = _previousFrameTime[frameType] != 0;
 
             _previousFrameTime[frameType] = currentFrameTime;
+
+            // The process clock may have been running for hours before this session.
+            // The first frame establishes the origin; it is not a frame-length sample.
+            if (!hasPreviousFrame)
+            {
+                return;
+            }
 
             lock (_frameLock[frameType])
             {

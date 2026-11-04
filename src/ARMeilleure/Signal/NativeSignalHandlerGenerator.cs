@@ -14,7 +14,9 @@ namespace ARMeilleure.Signal
         private const int StructWriteOffset = 4;
         private const int UnixOldSigaction = 8;
         private const int UnixOldSigaction3Arg = 16;
-        private const int RangeOffset = 20;
+        private const int UnixOldSigbus = 20;
+        private const int UnixOldSigbus3Arg = 28;
+        private const int RangeOffset = 32;
 
         private const int EXCEPTION_CONTINUE_SEARCH = 0;
         private const int EXCEPTION_CONTINUE_EXECUTION = -1;
@@ -174,8 +176,19 @@ namespace ARMeilleure.Signal
 
             context.BranchIfTrue(endLabel, isInRegion);
 
-            Operand unixOldSigaction = context.Load(OperandType.I64, Const((ulong)signalStructPtr + UnixOldSigaction));
-            Operand unixOldSigaction3Arg = context.Load(OperandType.I64, Const((ulong)signalStructPtr + UnixOldSigaction3Arg));
+            Operand unixOldSigaction = context.AllocateLocal(OperandType.I64);
+            Operand unixOldSigaction3Arg = context.AllocateLocal(OperandType.I32);
+            context.Copy(unixOldSigaction, context.Load(OperandType.I64, Const((ulong)signalStructPtr + UnixOldSigaction)));
+            context.Copy(unixOldSigaction3Arg, context.Load(OperandType.I32, Const((ulong)signalStructPtr + UnixOldSigaction3Arg)));
+
+            if (OperatingSystem.IsMacOS() || OperatingSystem.IsIOS())
+            {
+                Operand selected = Label();
+                context.BranchIf(selected, context.LoadArgument(OperandType.I32, 0), Const(10), Comparison.NotEqual); // SIGBUS
+                context.Copy(unixOldSigaction, context.Load(OperandType.I64, Const((ulong)signalStructPtr + UnixOldSigbus)));
+                context.Copy(unixOldSigaction3Arg, context.Load(OperandType.I32, Const((ulong)signalStructPtr + UnixOldSigbus3Arg)));
+                context.MarkLabel(selected);
+            }
             Operand threeArgLabel = Label();
 
             context.BranchIfTrue(threeArgLabel, unixOldSigaction3Arg);

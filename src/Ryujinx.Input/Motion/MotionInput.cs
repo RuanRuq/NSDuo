@@ -26,27 +26,22 @@ namespace Ryujinx.Input
 
         public void Update(Vector3 accel, Vector3 gyro, ulong timestamp, int sensitivity, float deadzone)
         {
-            if (TimeStamp != 0)
+            // Do not integrate the whole time spent paused/backgrounded into the first
+            // resumed sample, or a small movement becomes a large aim/attitude jump.
+            bool continuous = TimeStamp != 0 && timestamp > TimeStamp && timestamp - TimeStamp <= 100000;
+            Accelerometer = -accel;
+            Gyroscrope = gyro.Length() < deadzone ? Vector3.Zero : gyro * (sensitivity / 100f);
+
+            if (continuous)
             {
-                Accelerometer = -accel;
+                float deltaTime = (timestamp - TimeStamp) / 1000000f;
 
-                if (gyro.Length() < deadzone)
-                {
-                    gyro = Vector3.Zero;
-                }
-
-                gyro *= (sensitivity / 100f);
-
-                Gyroscrope = gyro;
-
-                float deltaTime = MathF.Abs((long)(timestamp - TimeStamp) / 1000000f);
-
-                Vector3 deltaGyro = gyro * deltaTime;
+                Vector3 deltaGyro = Gyroscrope * deltaTime;
 
                 Rotation += deltaGyro;
 
                 _filter.SamplePeriod = deltaTime;
-                _filter.Update(accel, DegreeToRad(gyro));
+                _filter.Update(accel, DegreeToRad(Gyroscrope));
             }
 
             TimeStamp = timestamp;
