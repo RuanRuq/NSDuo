@@ -69,7 +69,7 @@ using Ryujinx.HLE.Utilities;
 
 namespace Ryujinx.Library 
 {
-    class Library
+    partial class Library
     {
         private static VirtualFileSystem _virtualFileSystem;
         private static ContentManager _contentManager;
@@ -1058,6 +1058,7 @@ namespace Ryujinx.Library
             lock (inputConfigurationLock)
             {
                 _window = window;
+                _cheatContextReady = false;
                 window.RequestPause(_pauseRequested);
             }
             try
@@ -1168,6 +1169,12 @@ namespace Ryujinx.Library
                     return false;
                 }
 
+                lock (inputConfigurationLock)
+                {
+                    // Publish only after the program map and executable addresses exist.
+                    _cheatContextReady = !window.ExitRequested && Volatile.Read(ref _stopRequested) == 0;
+                }
+
                 SetupProgressHandler();
                 GameDiagnostics.Title(_emulationContext.Processes.ActiveApplication.Name, _emulationContext.Processes.ActiveApplication.DisplayVersion);
                 GameDiagnostics.Event($"title_id={GraphicsConfig.TitleId}; firmware={firmwareVersion?.VersionString}");
@@ -1182,14 +1189,19 @@ namespace Ryujinx.Library
                 // Public callbacks must no longer see the objects being destroyed.
                 lock (inputConfigurationLock)
                 {
+                    _cheatContextReady = false;
                     _window = null;
                     _emulationContext = null;
                 }
-                try { window.Dispose(); }
+                try { context?.TamperMachine.Dispose(); }
                 finally
                 {
-                    // Once a Switch exists, WindowBase owns both it and its GPU.
-                    if (context == null) renderer?.Dispose();
+                    try { window.Dispose(); }
+                    finally
+                    {
+                        // Once a Switch exists, WindowBase owns both it and its GPU.
+                        if (context == null) renderer?.Dispose();
+                    }
                 }
             }
         }

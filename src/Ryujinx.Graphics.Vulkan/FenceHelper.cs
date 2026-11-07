@@ -1,3 +1,4 @@
+using Ryujinx.Common.Logging;
 using Silk.NET.Vulkan;
 using System;
 
@@ -19,6 +20,7 @@ namespace Ryujinx.Graphics.Vulkan
 
         public static void WaitAllIndefinitely(Vk api, Device device, ReadOnlySpan<Fence> fences)
         {
+            using var timing = GameDiagnostics.MeasureGraphics(GraphicsTimingKind.GpuFenceWait);
             Result result;
             while ((result = api.WaitForFences(device, (uint)fences.Length, fences, true, DefaultTimeout)) == Result.Timeout)
             {

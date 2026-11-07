@@ -9,6 +9,7 @@ ROOT = Path(__file__).resolve().parents[3]
 OUT = Path(os.environ.get('NSDUO_DIAGNOSTIC_CHECK_OUT', str(ROOT / 'work/diagnostics-checks'))).resolve()
 OUT.mkdir(parents=True, exist_ok=True)
 sources = [ROOT / 'src/Ryujinx.Common/Logging/GameDiagnostics.cs',
+           ROOT / 'src/Ryujinx.Common/Logging/GraphicsTiming.cs',
            ROOT / 'src/Ryujinx.Common/ReleaseInformation.cs', Path(__file__).with_name('DiagnosticsChecks.cs')]
 items = ''.join(f'<Compile Include="{escape(str(p))}" />' for p in sources)
 common = ROOT / 'src/Ryujinx.Common/bin/Release/net10.0/Ryujinx.Common.dll'

@@ -14,9 +14,11 @@ class InGameConfigView_MenuView: ObservableObject {
     @Published private(set) var showButton = false
     private var hideTask: Task<Void, Never>?
     private var hideDeadline = ContinuousClock.now
+    private(set) var cornerRevealOnly = false
     static let shared = InGameConfigView_MenuView()
 
     func triggerButton() {
+        guard !cornerRevealOnly else { return }
         hideDeadline = .now.advanced(by: .seconds(5))
         if !showButton { showButton = true }
         // Pointer movement extends the deadline without publishing or creating
@@ -33,6 +35,22 @@ class InGameConfigView_MenuView: ObservableObject {
                     return
                 }
             }
+        }
+    }
+
+    func setCornerRevealOnly(_ enabled: Bool) {
+        guard cornerRevealOnly != enabled else { return }
+        cornerRevealOnly = enabled
+        hide()
+    }
+
+    func handleCornerTap(insideCorner: Bool) {
+        guard cornerRevealOnly else { return }
+        if insideCorner {
+            cancelAutoHide()
+            if !showButton { showButton = true }
+        } else {
+            hide()
         }
     }
 

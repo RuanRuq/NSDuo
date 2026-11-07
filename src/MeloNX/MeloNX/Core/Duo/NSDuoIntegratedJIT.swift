@@ -17,6 +17,7 @@ final class NSDuoIntegratedJIT: ObservableObject {
     @Published private(set) var hasPairing = false
     @Published private(set) var pairingName = ""
     @Published private(set) var pairingPIN: String?
+    @Published private(set) var isPairingServiceReady = false
     @Published private(set) var errorMessage: String?
 
     var isBusy: Bool { [.pairing, .importing, .connecting, .preparing, .resetting].contains(phase) }
@@ -28,6 +29,7 @@ final class NSDuoIntegratedJIT: ObservableObject {
     private var verifiedSessionComplete = false
     private var coreVerified = false
     private var helperSucceeded = false
+    private var openingPairingSettings = false
 
     private init() { refreshPairingStatus() }
 
@@ -61,6 +63,7 @@ final class NSDuoIntegratedJIT: ObservableObject {
         guard !isReady else { return }
         phase = .pairing
         pairingPIN = nil
+        isPairingServiceReady = false
         errorMessage = nil
         status = "正在准备本机配对后台任务，请保持 NS Duo 在前台，等待系统连接提示…"
         task = Task { [weak self] in
@@ -69,7 +72,12 @@ final class NSDuoIntegratedJIT: ObservableObject {
                 guard let self, self.phase == .pairing, self.pairingPIN == nil else { return }
                 switch stage {
                 case "published":
+                    guard !self.isPairingServiceReady else { return }
+                    self.isPairingServiceReady = true
                     self.status = "配对服务已就绪。请到系统设置 → 隐私与安全性 → 开发者模式，选择与 NS Duo 配对。先输入设备解锁密码，验证通过后返回 App 获取配对码。"
+                    if UIApplication.shared.applicationState == .active {
+                        self.openDeveloperModeSettings()
+                    }
                 case "connected":
                     self.status = "系统已连接，正在交换配对信息并生成配对码…"
                 case "rejectedPeer":
@@ -82,6 +90,7 @@ final class NSDuoIntegratedJIT: ObservableObject {
                 status = "设备验证已通过。请回到系统设置的 NS Duo 配对页面，输入下方六位配对码，完成后返回 NS Duo。"
             }, completion: { [weak self] data, error in
                 guard let self else { NSDuoOnDevicePairing.shared.finish(saved: false); return }
+                isPairingServiceReady = false
                 if let error {
                     pairingPIN = nil
                     NSDuoOnDevicePairing.shared.finish(saved: false)
@@ -121,8 +130,29 @@ final class NSDuoIntegratedJIT: ObservableObject {
 
     func cancelPairing() {
         guard phase == .pairing else { return }
+        isPairingServiceReady = false
         task?.cancel()
         NSDuoOnDevicePairing.shared.cancel()
+    }
+
+    /// Settings routes are private and may open only their parent page on some
+    /// systems. Keep the manual path visible even when the URL is accepted.
+    func openDeveloperModeSettings() {
+        guard phase == .pairing, isPairingServiceReady, !openingPairingSettings,
+              UIApplication.shared.applicationState == .active else { return }
+        openingPairingSettings = true
+        Task { [weak self] in
+            guard let self else { return }
+            defer { self.openingPairingSettings = false }
+            for route in ["App-prefs:root=Privacy&path=DEVELOPER_MODE",
+                          "App-prefs:root=Privacy", "App-prefs:"] {
+                guard self.phase == .pairing, self.isPairingServiceReady else { return }
+                guard let url = URL(string: route) else { continue }
+                if await UIApplication.shared.open(url, options: [:]) { return }
+            }
+            guard self.phase == .pairing, self.isPairingServiceReady else { return }
+            self.status = "无法自动打开系统设置。请手动打开设置 → 隐私与安全性 → 开发者模式，继续与 NS Duo 配对。"
+        }
     }
 
     func importPairing(from source: URL) async {

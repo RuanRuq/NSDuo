@@ -28,6 +28,25 @@ static class DiagnosticsChecks
         GameDiagnostics.Frame();
         GameDiagnostics.End();
 
+        // Disabled scopes are safe, including an invalid/sentinel metric kind.
+        GameDiagnostics.MeasureGraphics(GraphicsTimingKind.Count).Dispose();
+        var timingCounter = new DiagnosticTimingCounter();
+        long shortTicks = Stopwatch.Frequency / 500;
+        long longTicks = Stopwatch.Frequency / 50;
+        timingCounter.Begin();
+        Check(timingCounter.Read().Active == 1, "unfinished timing remains visible to the diagnostic writer");
+        timingCounter.Complete(shortTicks);
+        Parallel.For(0, 128, i =>
+        {
+            timingCounter.Begin();
+            timingCounter.Complete(i % 2 == 0 ? shortTicks : longTicks);
+        });
+        var measured = timingCounter.Read();
+        Check(measured.Calls == 129 && measured.Active == 0, "parallel timing completion counts and balanced active scopes");
+        Check(measured.TotalTicks == 65 * shortTicks + 64 * longTicks && measured.MaxTicks == longTicks,
+            "parallel timing preserves total and maximum duration");
+        Check(measured.Over1Ms == 129 && measured.Over16Ms == 64, "timing thresholds use elapsed stopwatch ticks");
+
         var tracker = new DiagnosticFrameTracker();
         tracker.Reset(T(1));
         Check(!tracker.Read(T(10)).IsStalled && tracker.Read(T(32)).IsStalled, "loading timeout");
@@ -47,6 +66,32 @@ static class DiagnosticsChecks
         Directory.CreateDirectory(root);
         try
         {
+            GameDiagnostics.Start(root, "old timing session", "");
+            var oldTiming = GameDiagnostics.MeasureGraphics(GraphicsTimingKind.AcquireImage);
+            GameDiagnostics.End();
+            GameDiagnostics.Start(root, "new timing session", "");
+            oldTiming.Dispose();
+            GameDiagnostics.End();
+            string newTimingDirectory = Directory.GetDirectories(root).Single(d =>
+                File.ReadAllText(Path.Combine(d, "info.txt")).StartsWith("new timing session"));
+            Check(!Directory.GetFiles(newTimingDirectory, "*.log").Any(p => File.ReadAllText(p).Contains("kind=AcquireImage")),
+                "a late old-session scope must not contaminate a new game session");
+
+            using (var timingSession = new DiagnosticSession(root, "timing summary", ""))
+            {
+                try
+                {
+                    using var timing = timingSession.MeasureGraphics(GraphicsTimingKind.GpuFenceWait);
+                    throw new InvalidOperationException("timing fixture");
+                }
+                catch (InvalidOperationException) { }
+                string timingPath = timingSession.DirectoryPath;
+                timingSession.Dispose();
+                string log = File.ReadAllText(Path.Combine(timingPath, "current.log"));
+                Check(log.Contains("\tgraphics_timing\t") && log.Contains("kind=GpuFenceWait")
+                    && log.Contains("calls=1;") && log.Contains("active=0"), "final timing summary is drained on shutdown");
+            }
+
             bool metadataAttempted = false;
             GameDiagnostics.Start(root, "game", () =>
             {

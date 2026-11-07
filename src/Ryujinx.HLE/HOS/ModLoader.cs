@@ -761,6 +761,9 @@ namespace Ryujinx.HLE.HOS
                 return;
             }
 
+            // Runtime imports need the executable mapping even when no file cheats exist.
+            tamperMachine.RegisterProcess(applicationId, tamperInfo);
+
             Logger.Info?.Print(LogClass.ModLoader, $"Build ids found for application {applicationId:X16}:\n    {String.Join("\n    ", tamperInfo.BuildIds)}");
 
             if (!_appMods.TryGetValue(applicationId, out ModCache mods) || mods.Cheats.Count == 0)

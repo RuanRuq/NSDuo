@@ -146,6 +146,7 @@ class RyujinxController: ObservableObject {
     
     @Published var _isPaused: Bool = false
     @Published private(set) var isStopping: Bool = false
+    @Published private(set) var isGameSuspended = false
     @Published private(set) var motionEnabled = true
 
     func setMotionEnabled(_ enabled: Bool) {
@@ -172,6 +173,33 @@ class RyujinxController: ObservableObject {
     private static var hasScript: Bool = false
     private var controllerManager: ControllerManager = .shared
     private var emulationThreadActive = false
+
+    var runningGame: GameInfo? {
+        guard case .started(let game, .none) = isRunning else { return nil }
+        return game
+    }
+
+    func isCurrentGame(_ game: NSDuoLibraryGame) -> Bool {
+        guard let runningGame else { return false }
+        return runningGame.fileURL.standardizedFileURL.path.hasSuffix("/" + game.relativePath)
+    }
+
+    func suspendGameToLibrary() {
+        guard emulationThreadActive, runningGame != nil, !isStopping else { return }
+        isPaused = true
+        wasManuallyPaused = true
+        isGameSuspended = true
+        UIApplication.shared.isIdleTimerDisabled = false
+    }
+
+    func resumeSuspendedGame() {
+        guard isGameSuspended, emulationThreadActive, !isStopping,
+              UIApplication.shared.applicationState == .active else { return }
+        isGameSuspended = false
+        wasManuallyPaused = false
+        isPaused = false
+        UIApplication.shared.isIdleTimerDisabled = true
+    }
     
     var firmwareVersion: String {
         return Ryujinx.installedFirmwareVersion
@@ -200,6 +228,7 @@ class RyujinxController: ObservableObject {
         guard emulationThreadActive, !isStopping else { return }
         NotificationCenter.default.post(name: .nsDuoReleaseInput, object: nil)
         isStopping = true
+        NSDuoCheatStore.shared.endSession()
         controllerManager.setEmulationActive(false)
         wasManuallyPaused = false
         // The owner thread resumes paused guest work before draining the GPU.
@@ -259,6 +288,7 @@ class RyujinxController: ObservableObject {
         Ryujinx.prepareEmulationStart()
         
         isRunning = .started(game: game)
+        isGameSuspended = false
         _isPaused = false
         wasManuallyPaused = false
         isStopping = false
@@ -266,6 +296,7 @@ class RyujinxController: ObservableObject {
         motionEnabled = NSDuoMotionPreferences.isEnabled(titleID: game.titleId)
         controllerManager.setMotionEnabled(motionEnabled)
         controllerManager.setEmulationActive(true)
+        NSDuoCheatStore.shared.beginSession(for: game)
 
         let nativeSettingsManager = NativeSettingsManager.shared
         
@@ -287,6 +318,8 @@ class RyujinxController: ObservableObject {
                 self.emulationThreadActive = false
                 self.controllerManager.setEmulationActive(false)
                 self.isStopping = false
+                self.isGameSuspended = false
+                NSDuoCheatStore.shared.endSession()
                 self._isPaused = false
                 self.wasManuallyPaused = false
                 
