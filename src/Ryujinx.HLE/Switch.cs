@@ -185,6 +185,8 @@ namespace Ryujinx.HLE
         {
             if (disposing)
             {
+                // No tamper worker may retain or access guest memory during teardown.
+                TamperMachine.Dispose();
                 System.Dispose();
                 AudioDeviceDriver.Dispose();
                 FileSystem.Dispose();

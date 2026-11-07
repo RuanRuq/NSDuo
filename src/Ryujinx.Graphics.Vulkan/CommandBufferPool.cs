@@ -1,3 +1,4 @@
+using Ryujinx.Common.Logging;
 using Silk.NET.Vulkan;
 using System;
 using System.Collections.Generic;
@@ -309,9 +310,13 @@ namespace Ryujinx.Graphics.Vulkan
                             PSignalSemaphores = pSignalSemaphores,
                         };
 
-                        lock (_queueLock)
+                        using (GameDiagnostics.MeasureGraphics(GraphicsTimingKind.QueueSubmitWithLock))
                         {
-                            _api.QueueSubmit(_queue, 1, in sInfo, entry.Fence.GetUnsafe()).ThrowOnError();
+                            lock (_queueLock)
+                            {
+                                using var timing = GameDiagnostics.MeasureGraphics(GraphicsTimingKind.QueueSubmitCall);
+                                _api.QueueSubmit(_queue, 1, in sInfo, entry.Fence.GetUnsafe()).ThrowOnError();
+                            }
                         }
                     }
                 }

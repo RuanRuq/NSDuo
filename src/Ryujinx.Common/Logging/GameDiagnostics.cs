@@ -87,6 +87,8 @@ namespace Ryujinx.Common.Logging
         public static void Problem(string message) => Volatile.Read(ref _session)?.Problem(message);
         public static void Statistics(double fps, double frameMs, double fifo) => Volatile.Read(ref _session)?.Statistics(fps, frameMs, fifo);
         public static void Title(string title, string version) => Volatile.Read(ref _session)?.Title(title, version);
+        public static GraphicsTimingScope MeasureGraphics(GraphicsTimingKind kind)
+            => Volatile.Read(ref _session)?.MeasureGraphics(kind) ?? default;
     }
 
     internal sealed class DiagnosticSession : IDisposable
@@ -102,6 +104,9 @@ namespace Ryujinx.Common.Logging
         private readonly Thread _writer;
         private readonly Stopwatch _clock = Stopwatch.StartNew();
         private readonly DiagnosticFrameTracker _frames = new();
+        private readonly DiagnosticTimingCounter[] _graphicsTimings = Enumerable.Range(0, (int)GraphicsTimingKind.Count)
+            .Select(_ => new DiagnosticTimingCounter()).ToArray();
+        private readonly long[] _lastGraphicsTimingCalls = new long[(int)GraphicsTimingKind.Count];
         private FileStream _file;
         private int _closed;
         private int _problem;
@@ -134,6 +139,24 @@ namespace Ryujinx.Common.Logging
         }
 
         internal string DirectoryPath => _directory;
+
+        internal GraphicsTimingScope MeasureGraphics(GraphicsTimingKind kind)
+        {
+            if (Volatile.Read(ref _closed) != 0 || (uint)kind >= (uint)_graphicsTimings.Length) return default;
+            return new GraphicsTimingScope(_graphicsTimings[(int)kind]);
+        }
+
+        private void WriteGraphicsTimings(bool paused)
+        {
+            for (int i = 0; i < _graphicsTimings.Length; i++)
+            {
+                var timing = _graphicsTimings[i].Read();
+                if (timing.Active == 0 && timing.Calls == _lastGraphicsTimingCalls[i]) continue;
+                _lastGraphicsTimingCalls[i] = timing.Calls;
+                double totalMs = timing.TotalTicks * 1000.0 / Stopwatch.Frequency;
+                WriteEvent("graphics_timing", $"kind={(GraphicsTimingKind)i}; cumulative=true; phase={_phase}; paused={paused}; calls={timing.Calls}; total_ms={totalMs:F3}; avg_ms={(timing.Calls == 0 ? 0 : totalMs / timing.Calls):F3}; max_ms={timing.MaxTicks * 1000.0 / Stopwatch.Frequency:F3}; over_1ms={timing.Over1Ms}; over_16ms={timing.Over16Ms}; active={timing.Active}");
+            }
+        }
 
         private void WriteInfo()
         {
@@ -323,6 +346,7 @@ namespace Ryujinx.Common.Logging
                     {
                         nextHeartbeat = now + 5000;
                         WriteEvent("sample", $"phase={_phase}; paused={sample.Paused}; frames={sample.Frames}; fps={Volatile.Read(ref _fps):F2}; frame_ms={Volatile.Read(ref _frameMs):F2}; fifo_percent={Volatile.Read(ref _fifo):F2}; gap_ms={sample.GapMs:F0}; max_gap_ms={sample.MaxGapMs:F0}; long_frames={sample.LongFrames}; managed_mb={GC.GetTotalMemory(false) / 1048576}; dropped={Interlocked.Exchange(ref _dropped, 0)}");
+                        WriteGraphicsTimings(sample.Paused);
                     }
                     if (!marked && Volatile.Read(ref _problem) != 0)
                     {
@@ -334,6 +358,7 @@ namespace Ryujinx.Common.Logging
                 if (Volatile.Read(ref _problem) != 0 && !marked)
                     File.WriteAllText(Path.Combine(_directory, "problem"), "Issue observed or marked.");
                 if (Interlocked.Exchange(ref _metadataChanged, 0) != 0) WriteInfo();
+                WriteGraphicsTimings(_frames.Read(Stopwatch.GetTimestamp()).Paused);
                 WriteEvent("end", "Emulation owner returned normally to the app");
                 _file.Flush();
                 File.Delete(Path.Combine(_directory, "running"));

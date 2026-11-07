@@ -506,6 +506,7 @@ namespace Ryujinx.HLE.HOS.Services.SurfaceFlinger
 
         private void AcquireBuffer(TextureCallbackInformation information)
         {
+            using var timing = GameDiagnostics.MeasureGraphics(GraphicsTimingKind.GuestFrameFence);
             information.Item.Fence.WaitForever(_device.Gpu);
         }
 

@@ -29,7 +29,7 @@ sources += [str(ROOT / p) for p in ['src/Ryujinx.Library/Compression/NszDecompre
     'src/Ryujinx.Library/Compression/NativeNsz.cs', 'src/Ryujinx.Library/Native/NativeTouchDriver.cs',
     'src/Ryujinx.Library/Native/NativeMouse.cs', 'src/Ryujinx.Input.Native/NativeGamepad.cs',
     'src/Ryujinx.Input.Native/NativeGamepadDriver.cs', 'src/Ryujinx.Common/Callbacks/CallbackRegistry.cs',
-    'src/Ryujinx.Common/Logging/GameDiagnostics.cs']]
+    'src/Ryujinx.Common/Logging/GameDiagnostics.cs', 'src/Ryujinx.Common/Logging/GraphicsTiming.cs']]
 window = (ROOT / 'src/Ryujinx.Library/Window/WindowBase.cs').read_text()
 methods = '\n'.join(block(window, signature) for signature in ['public void Render()',
     'private void SignalGpuDoneBeforeWorkerStart()', 'private void RecordRenderFailure(Exception error)'])

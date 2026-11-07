@@ -1,5 +1,6 @@
 using Ryujinx.Common;
 using Ryujinx.Common.Configuration;
+using Ryujinx.Common.Logging;
 using Ryujinx.Graphics.GAL.Multithreading.Commands;
 using Ryujinx.Graphics.GAL.Multithreading.Commands.Buffer;
 using Ryujinx.Graphics.GAL.Multithreading.Commands.Renderer;
@@ -261,6 +262,7 @@ namespace Ryujinx.Graphics.GAL.Multithreading
 
         internal void WaitForFrame()
         {
+            using var timing = GameDiagnostics.MeasureGraphics(GraphicsTimingKind.RendererFrameWait);
             _fault.Wait(_frameComplete);
         }
 

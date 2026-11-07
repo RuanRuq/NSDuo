@@ -42,6 +42,15 @@ struct NSDuoJITSetupControls: View {
                 }
             }
             if jit.phase == .pairing {
+                Button {
+                    jit.openDeveloperModeSettings()
+                } label: {
+                    Label("前往设置 · 开发者模式", systemImage: "arrow.up.forward.app")
+                        .frame(minHeight: 44)
+                }
+                .disabled(!jit.isPairingServiceReady)
+                Text("若系统只打开设置首页或隐私与安全性，请手动进入“隐私与安全性 → 开发者模式”。查看配对码后，也可点击上方按钮返回设置。")
+                    .font(.footnote).foregroundStyle(.secondary)
                 if jit.pairingPIN == nil {
                     Text("等待设备验证和配对码…").font(.headline)
                 }
@@ -179,8 +188,8 @@ struct NSDuoFirstPairingInstructions: View {
     var body: some View {
         VStack(alignment: .leading, spacing: 8) {
             Text("首次配对流程").font(.headline).foregroundStyle(.primary)
-            Text("1. 点击“首次开启 JIT”，允许访问本地网络，等待提示“配对服务已就绪”。首次配对无需先连接 VPN。")
-            Text("2. 打开系统设置 → 隐私与安全性 → 开发者模式，选择“与 NS Duo 配对”（Pair with NS Duo）。")
+            Text("1. 点击“首次开启 JIT”，允许访问本地网络。配对服务就绪后会自动尝试跳转到系统设置，也可点击“前往设置 · 开发者模式”。首次配对无需先连接 VPN。")
+            Text("2. 在系统设置 → 隐私与安全性 → 开发者模式，选择“与 NS Duo 配对”（Pair with NS Duo）。若未直达此页，请按上述路径进入。")
             Text("3. 系统第一次要求输入密码时，输入**这台 iPhone / iPad 的设备解锁密码**，完成设备身份验证。")
             Text("4. 设备验证通过后，**返回 NS Duo App**，查看弹窗或页面中的六位“本机配对码”。")
             Text("5. **再回到系统设置**的 NS Duo 配对页面，输入刚才在 App 中看到的**六位配对码**，等待系统完成配对。")

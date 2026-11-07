@@ -7,9 +7,14 @@ struct NSDuoRootView: View {
     @State private var showPreparation = false
     @State private var pendingURL: URL?
     @State private var failure: String?
+    @State private var failureTitle = "无法启动"
     @State private var initialized = false
     @State private var preparedResources = false
     @State private var launchTransition: NSDuoGameLaunch?
+    @State private var gameSwitch: NSDuoLibraryGame?
+    @State private var queuedGame: NSDuoLibraryGame?
+    @State private var queuedOwnerStopped = false
+    @State private var deferredGame: GameInfo?
 
     var body: some View {
         ZStack {
@@ -19,11 +24,15 @@ struct NSDuoRootView: View {
                     NSDuoLibraryView(onPlay: selectGame, onPrepare: { showPreparation = true },
                                      onImportFolder: importFolder, onImportFile: importFile, onLibraryAppear: checkFolders,
                                      hasPreparedResources: preparedResources)
-                        .disabled(!initialized)
+                        .disabled(!initialized || core.isStopping || queuedGame != nil)
                 }
             }
             .allowsHitTesting(launchTransition == nil)
             .accessibilityHidden(launchTransition != nil)
+            if queuedGame != nil || (core.isGameSuspended && core.isStopping) {
+                ProgressView(core.isStopping ? "正在关闭当前游戏…" : "正在准备下一款游戏…")
+                    .padding(24).background(.regularMaterial, in: RoundedRectangle(cornerRadius: 16))
+            }
             if let launch = launchTransition {
                 NSDuoGameLaunchView(launch: launch, onFadeOut: {
                     guard launchTransition?.id == launch.id else { return }
@@ -46,19 +55,47 @@ struct NSDuoRootView: View {
             if shown { launchTransition = nil }
         }
         .onReceive(NSDuoLibraryStore.shared.$message) { message in
-            if message != nil { launchTransition = nil }
+            if message != nil { launchTransition = nil; deferredGame = nil }
+        }
+        .onReceive(NSDuoCheatStore.shared.$message) { message in
+            if let message {
+                failureTitle = "金手指未应用"
+                failure = message
+                NSDuoCheatStore.shared.message = nil
+            }
         }
         .onChange(of: core.isRunning.isRunning()) { _, running in
             if !running {
                 switch core.isRunning {
-                case .stopped, .crashed: launchTransition = nil
+                case .stopped:
+                    launchTransition = nil
+                    if queuedGame != nil { queuedOwnerStopped = true }
+                case .crashed:
+                    queuedGame = nil
+                    queuedOwnerStopped = false
+                    deferredGame = nil
+                    gameSwitch = nil
+                    launchTransition = nil
                 case .started: break
                 }
             }
         }
-        .alert("无法启动", isPresented: Binding(get: { failure != nil }, set: { if !$0 { failure = nil } })) {
+        .alert(failureTitle, isPresented: Binding(get: { failure != nil }, set: { if !$0 { failure = nil } })) {
             Button("知道了", role: .cancel) { failure = nil }
         } message: { Text(failure ?? "") }
+        .sheet(item: $gameSwitch) { game in
+            NSDuoGameSwitchConfirmation(game: game) {
+                guard core.isGameSuspended, !core.isStopping else { return }
+                queuedOwnerStopped = false
+                queuedGame = game
+                gameSwitch = nil
+                core.stopGame()
+            }
+        }
+        .task(id: queuedOwnerStopped ? queuedGame?.id : nil) { await launchQueuedGameWhenReady() }
+        .onReceive(NotificationCenter.default.publisher(for: UIApplication.didBecomeActiveNotification)) { _ in
+            if let game = deferredGame { startGame(game) }
+        }
         .task {
             guard !initialized else { return }
             NativeSettingsManager.setShared()
@@ -73,12 +110,18 @@ struct NSDuoRootView: View {
         }
         .onChange(of: core.isRunning.hasCrashed()) { crashed in
             guard crashed, case .crashed(let result) = core.isRunning else { return }
+            queuedGame = nil
+            queuedOwnerStopped = false
+            deferredGame = nil
+            gameSwitch = nil
+            failureTitle = "游戏已退出"
             failure = "运行核心已退出（\(result)）。游戏文件仍保留。可以重试，或检查密钥、固件与该游戏的兼容性。"
             core.isRunning = .stopped
         }
         .onChange(of: scenePhase) { phase in
             NSDuoDiagnostics.recordEnvironment()
             if phase == .active {
+                if let game = deferredGame { startGame(game) }
                 if initialized, !showPreparation, launchTransition == nil, !NSDuoLibraryStore.shared.isBusy {
                     switch core.isRunning {
                     case .stopped, .crashed: refreshReadiness()
@@ -95,7 +138,7 @@ struct NSDuoRootView: View {
     private var showsLibrary: Bool {
         switch core.isRunning {
         case .stopped, .crashed: true
-        case .started: launchTransition?.didFadeOut == false
+        case .started: core.isGameSuspended || launchTransition?.didFadeOut == false
         }
     }
 
@@ -104,6 +147,9 @@ struct NSDuoRootView: View {
         switch core.isRunning {
         case .started(let game, .none):
             NSDuoPlayView(onGameReady: { revealLaunchDestination(for: game.fileURL) })
+                .opacity(core.isGameSuspended ? 0 : 1)
+                .allowsHitTesting(!core.isGameSuspended)
+                .accessibilityHidden(core.isGameSuspended)
                 .id(game.fileURL)
         case .started(let game, .noJIT):
             NSDuoJITView(game: game)
@@ -124,6 +170,7 @@ struct NSDuoRootView: View {
 
     private func checkFolders() {
         guard initialized, !showPreparation, launchTransition == nil, pendingURL == nil,
+              queuedGame == nil, deferredGame == nil,
               core.verifyKeysFile(path: .keysFolderURL, keys: .prod) else { return }
         switch core.isRunning {
         case .stopped, .crashed: NSDuoLibraryStore.shared.checkFolders()
@@ -133,6 +180,13 @@ struct NSDuoRootView: View {
 
     private func selectGame(_ game: NSDuoLibraryGame, sourceFrame: CGRect) {
         let library = NSDuoLibraryStore.shared
+        guard !core.isStopping, queuedGame == nil else { return }
+        if core.isGameSuspended {
+            if core.isCurrentGame(game) { core.resumeSuspendedGame() }
+            else { gameSwitch = game }
+            return
+        }
+        guard !core.isRunning.isRunning() else { return }
         guard launchTransition == nil, library.canPrepareLaunch else { return }
         let launch = NSDuoGameLaunch(title: game.title, cover: library.covers[game.id], sourceFrame: sourceFrame)
         launchTransition = launch
@@ -145,8 +199,29 @@ struct NSDuoRootView: View {
     }
 
     private func startGame(_ game: GameInfo) {
+        guard UIApplication.shared.applicationState == .active else { deferredGame = game; return }
+        deferredGame = nil
         if NSDuoIntegratedJIT.shared.isReady { core.startGame(game) }
         else { core.isRunning = .started(game: game, state: .noJIT) }
+    }
+
+    private func launchQueuedGameWhenReady() async {
+        guard queuedOwnerStopped, let next = queuedGame else { return }
+        while !Task.isCancelled, queuedGame?.id == next.id {
+            // Keep a confirmed switch pending while the app is in the background,
+            // or while a library mutation finishes. Read UIKit's live state here;
+            // a long-lived task must not retain an old scenePhase value.
+            if case .stopped = core.isRunning,
+               UIApplication.shared.applicationState == .active,
+               initialized, !showPreparation, !core.isStopping,
+               NSDuoLibraryStore.shared.canPrepareLaunch {
+                queuedGame = nil
+                queuedOwnerStopped = false
+                selectGame(next, sourceFrame: .zero)
+                return
+            }
+            do { try await Task.sleep(for: .milliseconds(250)) } catch { return }
+        }
     }
 
     private func revealLaunchDestination(for url: URL) {
@@ -155,6 +230,7 @@ struct NSDuoRootView: View {
     }
 
     private func cancelLaunchTransition() {
+        deferredGame = nil
         NSDuoLibraryStore.shared.cancelImport()
         switch core.isRunning {
         case .started(_, .none):
@@ -171,6 +247,7 @@ struct NSDuoRootView: View {
     }
 
     private func importFolder(_ url: URL) {
+        guard !core.isRunning.hasStarted() else { return }
         guard core.verifyKeysFile(path: .keysFolderURL, keys: .prod) else {
             NSDuoLibraryStore.shared.message = "识别游戏、升级包和 DLC 需要密钥。请先在“运行准备”中导入密钥，再添加文件夹。"
             return
@@ -179,6 +256,7 @@ struct NSDuoRootView: View {
     }
 
     private func importFile(_ url: URL) {
+        guard !core.isRunning.hasStarted() else { return }
         guard core.verifyKeysFile(path: .keysFolderURL, keys: .prod) else {
             NSDuoLibraryStore.shared.message = "识别游戏需要密钥。请先在“运行准备”中导入密钥。"
             return
@@ -187,6 +265,7 @@ struct NSDuoRootView: View {
     }
 
     private func refreshReadiness(resumePending: Bool = false) {
+        guard !core.isRunning.hasStarted(), queuedGame == nil, deferredGame == nil else { return }
         NSDuoLibraryStore.shared.refreshResourceReadiness { ready in
             preparedResources = ready
             if resumePending {
@@ -211,6 +290,8 @@ struct NSDuoRootView: View {
                 showPreparation = true
             case .failure(let error):
                 launchTransition = nil
+                deferredGame = nil
+                failureTitle = "无法启动"
                 failure = error.localizedDescription
             }
         }

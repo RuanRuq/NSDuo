@@ -1,4 +1,5 @@
 using Ryujinx.Common.Configuration;
+using Ryujinx.Common.Logging;
 using Ryujinx.Graphics.GAL;
 using Ryujinx.Graphics.Vulkan.Effects;
 using Silk.NET.Vulkan;
@@ -318,13 +319,17 @@ namespace Ryujinx.Graphics.Vulkan
 
             while (true)
             {
-                Result acquireResult = _gd.SwapchainApi.AcquireNextImage(
-                    _device,
-                    _swapchain,
-                    ulong.MaxValue,
-                    _imageAvailableSemaphores[semaphoreIndex],
-                    new Fence(),
-                    ref nextImage);
+                Result acquireResult;
+                using (GameDiagnostics.MeasureGraphics(GraphicsTimingKind.AcquireImage))
+                {
+                    acquireResult = _gd.SwapchainApi.AcquireNextImage(
+                        _device,
+                        _swapchain,
+                        ulong.MaxValue,
+                        _imageAvailableSemaphores[semaphoreIndex],
+                        new Fence(),
+                        ref nextImage);
+                }
 
                 if (acquireResult == Result.ErrorOutOfDateKhr ||
                     acquireResult == Result.SuboptimalKhr ||
@@ -489,9 +494,13 @@ namespace Ryujinx.Graphics.Vulkan
                 PResults = &result,
             };
 
-            lock (_gd.QueueLock)
+            using (GameDiagnostics.MeasureGraphics(GraphicsTimingKind.QueuePresentWithLock))
             {
-                _gd.SwapchainApi.QueuePresent(_gd.Queue, in presentInfo);
+                lock (_gd.QueueLock)
+                {
+                    using var timing = GameDiagnostics.MeasureGraphics(GraphicsTimingKind.QueuePresentCall);
+                    _gd.SwapchainApi.QueuePresent(_gd.Queue, in presentInfo);
+                }
             }
         }
 

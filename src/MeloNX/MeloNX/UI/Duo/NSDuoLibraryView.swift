@@ -7,6 +7,7 @@ import SwiftUI
 import UniformTypeIdentifiers
 
 struct NSDuoLibraryView: View {
+    @EnvironmentObject private var core: RyujinxController
     let onPlay: (NSDuoLibraryGame, CGRect) -> Void
     let onPrepare: () -> Void
     let onImportFolder: (URL) -> Void
@@ -23,6 +24,7 @@ struct NSDuoLibraryView: View {
     @State private var renamedTitle = ""
     @State private var showingDiagnostics = false
     @State private var coverFrames: [UUID: CGRect] = [:]
+    @State private var cheatDestination: NSDuoCheatDestination?
 
     init(onPlay: @escaping (NSDuoLibraryGame, CGRect) -> Void, onPrepare: @escaping () -> Void,
          onImportFolder: @escaping (URL) -> Void, onImportFile: @escaping (URL) -> Void,
@@ -40,7 +42,7 @@ struct NSDuoLibraryView: View {
             ScrollView {
                 VStack(alignment: .leading, spacing: 20) {
                     Button {
-                        guard library.isReady, !library.isBusy else { return }
+                        guard library.isReady, !library.isBusy, !core.isRunning.hasStarted() else { return }
                         importingFolder = true
                         library.isChoosingFiles = true
                         showingImporter = true
@@ -51,7 +53,7 @@ struct NSDuoLibraryView: View {
                     }
                     .buttonStyle(.borderedProminent)
                     .controlSize(.large)
-                    .disabled(!library.isReady)
+                    .disabled(!library.isReady || core.isRunning.hasStarted())
                     .allowsHitTesting(!library.isBusy)
 
                     Text("选择一个游戏的目录，本体、升级包和 DLC 可以放在任意子文件夹里。")
@@ -92,11 +94,12 @@ struct NSDuoLibraryView: View {
                 ToolbarItem(placement: .topBarLeading) {
                     Menu {
                         Button("添加单个 XCI / NSP / NSZ") {
-                            guard library.isReady, !library.isBusy else { return }
+                            guard library.isReady, !library.isBusy, !core.isRunning.hasStarted() else { return }
                             importingFolder = false
                             library.isChoosingFiles = true
                             showingImporter = true
                         }
+                        .disabled(core.isRunning.hasStarted())
                         Button("诊断日志", systemImage: "doc.text.magnifyingglass") {
                             guard library.isReady, !library.isBusy else { return }
                             showingDiagnostics = true
@@ -106,22 +109,36 @@ struct NSDuoLibraryView: View {
                     .allowsHitTesting(!library.isBusy)
                 }
                 ToolbarItem(placement: .topBarTrailing) {
-                    Button {
-                        guard !library.isBusy else { return }
-                        onPrepare()
-                    } label: {
-                        HStack(spacing: 6) {
-                            Text("运行准备").foregroundStyle(.white)
-                            if hasPreparedResources && jit.isReady {
-                                Image(systemName: "checkmark.circle.fill")
-                                    .foregroundStyle(.green)
-                                    .accessibilityHidden(true)
+                    HStack(spacing: 12) {
+                        if core.isGameSuspended {
+                            Button {
+                                core.resumeSuspendedGame()
+                            } label: {
+                                Label("游戏已挂起", systemImage: "pause.circle.fill")
+                                    .foregroundStyle(.orange)
+                            }
+                            .accessibilityLabel("游戏已挂起，继续\(core.runningGame?.titleName ?? "游戏")")
+                            .disabled(core.isStopping)
+                        }
+                        Button {
+                            guard !library.isBusy else { return }
+                            onPrepare()
+                        } label: {
+                            HStack(spacing: 6) {
+                                Text("运行准备").foregroundStyle(.white)
+                                if hasPreparedResources && jit.isReady {
+                                    Image(systemName: "checkmark.circle.fill")
+                                        .foregroundStyle(.green)
+                                        .accessibilityHidden(true)
+                                }
                             }
                         }
+                        .font(.footnote)
+                        .accessibilityLabel(hasPreparedResources && jit.isReady ? "运行准备，已全部就绪" : "运行准备，尚未全部就绪")
+                        .allowsHitTesting(!library.isBusy)
+                        .disabled(core.isRunning.hasStarted())
                     }
                     .font(.footnote)
-                    .accessibilityLabel(hasPreparedResources && jit.isReady ? "运行准备，已全部就绪" : "运行准备，尚未全部就绪")
-                    .allowsHitTesting(!library.isBusy)
                 }
             }
         }
@@ -131,6 +148,10 @@ struct NSDuoLibraryView: View {
         // game and memory pressure still release it through the store.
         .onDisappear { library.setCoverLoadingSuspended(true) }
         .sheet(isPresented: $showingDiagnostics) { NSDuoDiagnosticsView() }
+        .sheet(item: $cheatDestination) { destination in
+            NSDuoCheatsView(game: destination.game, mode: destination.mode)
+                .id(destination.id)
+        }
         .onChange(of: showingImporter) { _, shown in library.isChoosingFiles = shown }
         .fileImporter(isPresented: $showingImporter,
                       allowedContentTypes: importingFolder ? [.folder] : [.xci, .nsp, UTType(filenameExtension: "nsz") ?? .data],
@@ -234,6 +255,14 @@ struct NSDuoLibraryView: View {
         .onAppear { library.requestCover(for: game) }
         .onDisappear { library.endCoverRequest(for: game) }
         .contextMenu {
+            Button("启用金手指", systemImage: "wand.and.stars") {
+                cheatDestination = NSDuoCheatDestination(game: game, mode: .enable)
+            }
+            .disabled(library.isBusy || core.isStopping)
+            Button("编辑金手指", systemImage: "square.and.pencil") {
+                cheatDestination = NSDuoCheatDestination(game: game, mode: .edit)
+            }
+            .disabled(library.isBusy || core.isStopping)
             Button("重命名", systemImage: "pencil") {
                 renamedTitle = game.title
                 pendingRename = game
@@ -242,10 +271,12 @@ struct NSDuoLibraryView: View {
             Button("移除游戏", systemImage: "trash", role: .destructive) {
                 pendingRemoval = game
             }
-            .disabled(library.isBusy)
+            .disabled(library.isBusy || core.isCurrentGame(game))
         }
         .accessibilityLabel(game.title)
-        .accessibilityHint("轻点启动游戏，长按可重命名或移除 App 内的副本")
+        .accessibilityHint(core.isCurrentGame(game) && core.isGameSuspended
+                           ? "轻点继续挂起的游戏，长按可编辑或启用金手指"
+                           : "轻点启动游戏，长按可编辑或启用金手指、重命名或移除副本")
     }
 
     private func gameCover(_ game: NSDuoLibraryGame) -> some View {
@@ -262,6 +293,14 @@ struct NSDuoLibraryView: View {
                 }
             }
             .clipShape(RoundedRectangle(cornerRadius: 18))
+            .overlay(alignment: .topLeading) {
+                if core.isCurrentGame(game) && core.isGameSuspended {
+                    Label("已挂起", systemImage: "pause.fill")
+                        .font(.caption.weight(.semibold))
+                        .padding(8).background(.regularMaterial, in: Capsule())
+                        .padding(8)
+                }
+            }
             .overlay(alignment: .bottomTrailing) {
                 Image(systemName: "play.fill")
                     .font(.system(size: 12, weight: .semibold))

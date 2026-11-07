@@ -122,3 +122,9 @@ python3 tools/nsduo/tests/run-console-motion-checks.py
 - 日志与体感：控制台轮转、输出描述符恢复、多次会话、重复低等级日志合并、退出排空在途错误日志、按游戏保存体感偏好。
 
 这些检查验证逻辑与资源生命周期；FPS、峰值内存、发热、真实音频和触控体感仍需真机对比。日志分段目标为 2 MiB，按秒检查，瞬时大量输出可能超过目标；纹理回收每帧限制次数和启动新回收的时间窗口，单次驱动 flush 仍可能较慢。
+
+## 图形提交计时 / Graphics submission timing
+
+诊断用例新增计时计数器并发、异常路径收尾、结束汇总和旧会话隔离的覆盖，并将 `GraphicsTiming.cs` 加入相关主机检查的源码清单。字段解释见[图形诊断说明](../../../docs/graphics-diagnostics.md)。本轮同步仅做静态检查，未执行这些主机回归，也未验证异步提交的实际性能或画面一致性。
+
+The diagnostic sources add timing-counter concurrency, exception cleanup, final summaries and session-isolation coverage. This synchronization checks them statically; host regressions and device performance/rendering validation were not run.

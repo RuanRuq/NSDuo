@@ -19,6 +19,10 @@ struct NSDuoPlayView: View {
             let gameAreaHeight = max(0, geometry.size.height - gamepadHeight)
             let viewport = CGSize(width: geometry.size.width, height: gameHeight)
             let renderSize = targetSize(in: viewport, aspectRatio: core.currentSettings.aspectRatio)
+            let controlsTop = geometry.safeAreaInsets.top + 8
+            let controlsLeading = geometry.safeAreaInsets.leading + 12
+            let controlsCorner = CGSize(width: controlsLeading + NSDuoPlayControls.size.width,
+                                        height: controlsTop + NSDuoPlayControls.size.height)
             VStack(spacing: 0) {
                 ZStack {
                     Color.black
@@ -39,20 +43,28 @@ struct NSDuoPlayView: View {
                 // Center the unchanged game viewport in all space above the gamepad.
                 .frame(width: viewport.width, height: gameAreaHeight)
                 .clipped()
+                .background {
+                    NSDuoPlayTapObserver(enabled: !portrait && !core.isGameSuspended && !stopping && !confirmExit,
+                                         cornerSize: controlsCorner)
+                }
                 .overlay(alignment: .topLeading) {
-                    NSDuoPlayControls(alwaysVisible: portrait || core.isPaused || confirmExit,
+                    NSDuoPlayControls(alwaysVisible: portrait || confirmExit,
                                       isPaused: core.isPaused, stopping: stopping,
                                       pause: {
                         releaseInput()
                         core.isPaused.toggle()
                         core.wasManuallyPaused = core.isPaused
+                    }, library: {
+                        releaseInput()
+                        InGameConfigView_MenuView.shared.hide()
+                        core.suspendGameToLibrary()
                     }, exit: {
                         releaseInput()
                         InGameConfigView_MenuView.shared.cancelAutoHide()
                         confirmExit = true
                     })
-                    .padding(.top, geometry.safeAreaInsets.top + 8)
-                    .padding(.leading, geometry.safeAreaInsets.leading + 12)
+                    .padding(.top, controlsTop)
+                    .padding(.leading, controlsLeading)
                 }
                 if portrait {
                     NSDuoGamepad()
@@ -63,12 +75,15 @@ struct NSDuoPlayView: View {
                         .background(Color(red: 0.075, green: 0.085, blue: 0.11))
                 }
             }
+            .onChange(of: portrait, initial: true) { _, portrait in
+                InGameConfigView_MenuView.shared.setCornerRevealOnly(!portrait)
+            }
             .onChange(of: geometry.size) { _ in releaseInput(); InGameConfigView_MenuView.shared.hide() }
         }
         .ignoresSafeArea()
-        .statusBarHidden()
-        .alert("返回游戏库？", isPresented: $confirmExit) {
-            Button("返回游戏库", role: .destructive) {
+        .statusBarHidden(!core.isGameSuspended)
+        .alert("关闭游戏？", isPresented: $confirmExit) {
+            Button("关闭游戏", role: .destructive) {
                 releaseInput()
                 // Let the emulation thread report stopped; do not replace its live Metal layer.
                 core.stopGame()
@@ -86,11 +101,16 @@ struct NSDuoPlayView: View {
         .onAppear {
             InGameConfigView_MenuView.shared.hide()
             statistics.registerPush(includeMetrics: false)
-            UIApplication.shared.isIdleTimerDisabled = true
+            UIApplication.shared.isIdleTimerDisabled = !core.isGameSuspended
+        }
+        .onChange(of: core.isGameSuspended) { _, suspended in
+            releaseInput()
+            InGameConfigView_MenuView.shared.hide()
+            UIApplication.shared.isIdleTimerDisabled = !suspended
         }
         .task {
             while !Task.isCancelled {
-                NSDuoDiagnostics.recordEnvironment()
+                if !core.isGameSuspended { NSDuoDiagnostics.recordEnvironment() }
                 do { try await Task.sleep(for: .seconds(5)) } catch { break }
             }
         }
@@ -105,6 +125,7 @@ struct NSDuoPlayView: View {
         }
         .onChange(of: scenePhase) { phase in if phase != .active { releaseInput() } }
         .onDisappear {
+            InGameConfigView_MenuView.shared.setCornerRevealOnly(false)
             InGameConfigView_MenuView.shared.hide()
             statistics.unregisterPush()
             releaseInput()
@@ -118,11 +139,16 @@ struct NSDuoPlayView: View {
 // Menu visibility only invalidates these small controls, not the Metal viewport
 // and the virtual gamepad underneath it.
 private struct NSDuoPlayControls: View {
+    static let buttonSize: CGFloat = 44
+    static let spacing: CGFloat = 2
+    static let size = CGSize(width: buttonSize * 3 + spacing * 2, height: buttonSize)
+
     @ObservedObject private var menu = InGameConfigView_MenuView.shared
     let alwaysVisible: Bool
     let isPaused: Bool
     let stopping: Bool
     let pause: () -> Void
+    let library: () -> Void
     let exit: () -> Void
 
     var body: some View {
@@ -130,17 +156,23 @@ private struct NSDuoPlayControls: View {
     }
 
     private var controls: some View {
-        HStack(spacing: 2) {
+        HStack(spacing: Self.spacing) {
             Button(action: pause) {
                 Label(isPaused ? "继续游戏" : "暂停游戏", systemImage: isPaused ? "play.fill" : "pause.fill")
                     .labelStyle(.iconOnly)
-                    .frame(width: 44, height: 44)
+                    .frame(width: Self.buttonSize, height: Self.buttonSize)
+                    .contentShape(Rectangle())
+            }
+            Button(action: library) {
+                Label("返回游戏库", systemImage: "chevron.left")
+                    .labelStyle(.iconOnly)
+                    .frame(width: Self.buttonSize, height: Self.buttonSize)
                     .contentShape(Rectangle())
             }
             Button(action: exit) {
-                Label("返回游戏库", systemImage: "square.grid.2x2.fill")
+                Label("关闭游戏", systemImage: "xmark.circle.fill")
                     .labelStyle(.iconOnly)
-                    .frame(width: 44, height: 44)
+                    .frame(width: Self.buttonSize, height: Self.buttonSize)
                     .contentShape(Rectangle())
             }
         }
@@ -151,4 +183,81 @@ private struct NSDuoPlayControls: View {
         .disabled(stopping)
     }
 
+}
+
+// Observe the whole game area, including letterboxing and the paused viewport,
+// without placing a hit-testing overlay above Metal or cancelling game touches.
+private struct NSDuoPlayTapObserver: UIViewRepresentable {
+    let enabled: Bool
+    let cornerSize: CGSize
+
+    func makeUIView(context: Context) -> NSDuoPlayTapObservationView {
+        let view = NSDuoPlayTapObservationView(frame: .zero)
+        view.isUserInteractionEnabled = false
+        return view
+    }
+
+    func updateUIView(_ uiView: NSDuoPlayTapObservationView, context: Context) {
+        uiView.cornerSize = cornerSize
+        uiView.tapEnabled = enabled
+    }
+
+    static func dismantleUIView(_ uiView: NSDuoPlayTapObservationView, coordinator: ()) {
+        uiView.tapEnabled = false
+        uiView.detach()
+    }
+}
+
+private final class NSDuoPlayTapObservationView: UIView, UIGestureRecognizerDelegate {
+    var cornerSize = CGSize.zero
+    var tapEnabled = false {
+        didSet {
+            if tapEnabled != oldValue { tapRecognizer.isEnabled = tapEnabled }
+        }
+    }
+    private weak var observedWindow: UIWindow?
+    private lazy var tapRecognizer: UITapGestureRecognizer = {
+        let recognizer = UITapGestureRecognizer(target: self, action: #selector(handleTap(_:)))
+        recognizer.cancelsTouchesInView = false
+        recognizer.delaysTouchesBegan = false
+        recognizer.delaysTouchesEnded = false
+        recognizer.delegate = self
+        recognizer.isEnabled = tapEnabled
+        return recognizer
+    }()
+
+    override func didMoveToWindow() {
+        super.didMoveToWindow()
+        guard observedWindow !== window else { return }
+        detach()
+        if let window {
+            window.addGestureRecognizer(tapRecognizer)
+            observedWindow = window
+        }
+    }
+
+    func detach() {
+        observedWindow?.removeGestureRecognizer(tapRecognizer)
+        observedWindow = nil
+    }
+
+    func gestureRecognizer(_ gestureRecognizer: UIGestureRecognizer, shouldReceive touch: UITouch) -> Bool {
+        guard tapEnabled, bounds.contains(touch.location(in: self)) else { return false }
+        // Visible buttons own their taps. Do not reveal/hide the menu as a side
+        // effect of pressing pause, return or close.
+        return !InGameConfigView_MenuView.shared.showButton || !cornerRect.contains(touch.location(in: self))
+    }
+
+    func gestureRecognizer(_ gestureRecognizer: UIGestureRecognizer,
+                           shouldRecognizeSimultaneouslyWith otherGestureRecognizer: UIGestureRecognizer) -> Bool {
+        true
+    }
+
+    private var cornerRect: CGRect { CGRect(origin: .zero, size: cornerSize) }
+
+    @objc private func handleTap(_ recognizer: UITapGestureRecognizer) {
+        let point = recognizer.location(in: self)
+        guard tapEnabled, bounds.contains(point) else { return }
+        InGameConfigView_MenuView.shared.handleCornerTap(insideCorner: cornerRect.contains(point))
+    }
 }

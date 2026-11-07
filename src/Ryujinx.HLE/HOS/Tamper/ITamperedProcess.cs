@@ -5,6 +5,7 @@ namespace Ryujinx.HLE.HOS.Tamper
     interface ITamperedProcess
     {
         ProcessState State { get; }
+        bool IsPaused { get; }
 
         bool TamperedCodeMemory { get; set; }
 

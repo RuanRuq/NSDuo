@@ -132,6 +132,7 @@ namespace Ryujinx.Graphics.Vulkan
                 }
 
                 long beforeTicks = Stopwatch.GetTimestamp();
+                using var timing = GameDiagnostics.MeasureGraphics(GraphicsTimingKind.GpuSyncWait);
 
                 if (result.NeedsFlush(_flushId))
                 {

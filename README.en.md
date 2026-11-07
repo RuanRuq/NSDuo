@@ -43,10 +43,13 @@ These additions focus on everyday workflow and the mobile experience. Compatibil
 - **Automatic cover art:** extract embedded game icons and cache thumbnails, including for existing library entries; show a controller placeholder when no icon is available.
 - **NSZ conversion:** stream-decompress to a cached NSP on first import, with progress and cancellation, without modifying the source.
 - **In-app preparation:** bundled local tunnel and separate JIT helper extensions, exposed as **Connect VPN** and **Enable JIT**. Without a pairing record, the JIT button guides first pairing on iOS / iPadOS 27+.
-- **Duo layout:** the bottom 35% is the virtual controller in expanded portrait. The game viewport fits within 50% of the screen height and is centered in the remaining upper 65%, splitting the extra 15% of black space evenly above and below. Landscape uses the full game area with an external controller. Compact pause/library controls stay at the top right, and buttons other than sticks have subtle haptics.
+- **Duo layout:** the bottom 35% holds the portrait touch controller; the game viewport fits within 50% of the screen height and is centered in the upper 65%. Landscape uses the full game area with an external controller. Pause, library and close controls sit at the top left. They remain visible in portrait; tap that corner to reveal them in landscape and tap elsewhere in the game area to hide them.
 - **Simplified Chinese game language by default**, subject to game support.
 - **Shader and driver pipeline caching:** reuse encountered shaders and attempt to save new pipeline work at intervals of at least one minute when memory headroom permits and no recent memory warning is active, as well as on orderly shutdown. Validate device/driver compatibility and coordinate creation per shader program. Reclaim recreatable textures in bounded batches under memory pressure, avoiding GPU readbacks while paused. Resolution and drawing quality are preserved; first-time content may still stutter.
 - **Phone motion input:** player one uses the phone sensors even with an external controller; other players retain their own controller sensors. The first sample after pause/backgrounding does not integrate rotation across the interruption.
+- **Cheats:** long-press a game to edit your own Atmosphère codes, save choices by Build ID, select multiple functions and apply them to the suspended game. No game codes are bundled or downloaded.
+- **Suspend and resume:** returning to the library pauses and retains the current game. Tap its card or the suspended-game indicator to continue. Switching games requires two confirmations and waits for the previous core to stop.
+- **Asynchronous graphics submission:** enable MoltenVK asynchronous queue submission and log applied settings and graphics waits. Existing quality settings, locks and fences remain in place; performance and stability require device testing.
 - **Local diagnostics:** record game activity, core exceptions, uncaught Objective-C exceptions and system-delivered MetricKit crash reports. Select multiple records to export, or clear logs; nothing is uploaded automatically.
 
 ## Usage
@@ -57,7 +60,7 @@ The minimum deployment target is **iOS 17.4** for the app, VPN extension and JIT
 
 1. Build and install with **your own developer account**, following the instructions below, and enable Developer Mode on the device.
 2. Import your own keys and firmware in the preparation screen. You may also import an existing **remote pairing record for this device**, distinct from game keys and traditional USB pairing records.
-3. On iOS / iPadOS 27+, use the first-time JIT button when no record exists. Allow local-network access and wait for the pairing service to become ready. In Settings → Privacy & Security → Developer Mode, choose **Pair with NS Duo** and enter the **device unlock passcode** first. After verification, return to NS Duo to read its **six-digit pairing code**, then return to Settings and enter that code. Confirm that NS Duo saved the record before continuing. First pairing does not require the VPN; keep the app alive during pairing. Older systems require a computer-generated remote pairing record.
+3. On iOS / iPadOS 27+, use the first-time JIT button when no record exists and allow local-network access. Once ready, NS Duo attempts to open Developer Mode; a manual settings button is also available. If the system does not navigate directly, open Settings → Privacy & Security → Developer Mode and choose **Pair with NS Duo**. Enter the **device unlock passcode** first, return to NS Duo to read its **six-digit pairing code**, then enter that code in Settings. Confirm the record was saved before continuing. First pairing does not require the VPN; keep the app alive during pairing. Older systems require a computer-generated remote pairing record.
 4. Tap **Connect VPN**, approve the iOS VPN/local-network prompts, then tap **Enable JIT**. Initial developer-image preparation requires internet access; keep the app in the foreground.
 5. Launch after the ready state appears. Other games in the same app process reuse that session. Force-quitting, system termination or a device restart requires preparation again.
 
@@ -86,7 +89,11 @@ Long-press a game card, choose removal, then continuously hold the confirmation 
 
 ### 3. Pause, exit and save
 
-Pause retains the running state within the current process. Returning to the library stops the current game and cleans up core resources. **It does not create an automatic save state or promise to resume at that exact point next time.** Save using the game's own save function before exiting.
+**Pause** keeps the running state in the current process. **Return to Library** suspends the game while retaining its thread and view. Tap its card or the suspended-game indicator at the top right to resume the same session. Game import, preparation changes and removal of the current game are unavailable while suspended; becoming active does not resume automatically.
+
+**Close Game** ends the session after confirmation. Selecting another game requires confirmation of the switch and of closing the current session, then waits for the old core to stop. If backgrounded during shutdown, the next launch waits until the app is active again.
+
+**Suspension works only within the current app process; it is not a save state.** Closing the game, system termination or restarting the device loses that suspended session. Use the game’s own save function.
 
 ### 4. Review and clear logs
 
@@ -94,7 +101,15 @@ Open diagnostic logs from the library menu, select one, several or all records, 
 
 Core exceptions have separate bounded files, and system reports can include redacted call stacks. MetricKit delivery may be delayed until the app reopens; its reporting period does not identify an exact crash time or game session. System kills and memory exhaustion may leave no stack. Long-frame and interrupted-session markers remain diagnostic clues. See the [regression-check documentation](tools/nsduo/tests/README.md) for coverage and limits.
 
-This source update also corrects the iOS signal ABI and adds a checked-memory compatibility policy for a specific game. It does not establish that the game now runs. This synchronization uses static validation; full builds, JIT and gameplay still require device verification.
+See [graphics submission and wait diagnostics](docs/graphics-diagnostics.md) for configuration readback, timing fields and interpretation limits. Signal ABI and title-specific checked-memory changes still require actual gameplay verification.
+
+### 5. Edit and enable cheats
+
+Long-press a game and choose cheat editing. Enter the 16-character Build ID from the original code filename and paste Atmosphère content for that version, using `[function name]` and `{master code name}` sections. The editor restores saved source text; new or changed functions default to disabled. A running, suspended game can supply its Build ID. A version mismatch or compilation failure preserves the previous configuration.
+
+Select functions in the enable-cheats sheet. For a stopped game, save choices for the next launch. For the suspended current game, apply and return to continue the same session. Master sections are enabled with selected functions and execute first. Scene-dependent or button-triggered codes retain their original conditions. Disabling a function stops future writes but may not restore values already changed.
+
+The new native cheat interface requires rebuilding the core and app from current sources before device testing; an old core cannot provide it. This synchronization performs static validation only, with no new app build or device run.
 
 ## Build and install
 

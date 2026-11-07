@@ -47,7 +47,7 @@ namespace Ryujinx.Graphics.Vulkan.MoltenVK
 
     readonly struct Bool32
     {
-        uint Value { get; }
+        public uint Value { get; }
 
         public Bool32(uint value)
         {
