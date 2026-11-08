@@ -12,7 +12,7 @@ This project is intended for learning, technical research and knowledge sharing,
 
 **Non-commercial use request:** The maintainers ask that this project be used for non-commercial learning and research, rather than sales, paid distribution or other commercial monetization. This is a voluntary request, not an additional license condition. It does not change rights already granted under existing licenses; each component's applicable license governs its use.
 
-Its purpose is not to play cracked games, distribute pirated content or facilitate infringement. It does not provide such resources or download sources.
+Its purpose is not to play cracked games, distribute pirated content or facilitate infringement. It does not host or distribute those resource files.
 
 **Users must obtain XCI, NSP and NSZ game files themselves through lawful means and ensure they have the rights required to use them.** This project does not supply these files. Required keys, firmware and other materials must also be lawfully provided by the user.
 
@@ -65,6 +65,8 @@ The minimum deployment target is **iOS 17.4** for the app, VPN extension and JIT
 5. Launch after the ready state appears. Other games in the same app process reuse that session. Force-quitting, system termination or a device restart requires preparation again.
 
 After initial configuration, the intended flow uses the phone's bundled extensions to prepare JIT. OS changes, invalid pairing records and network conditions can still affect it.
+
+When preparing the runtime environment, you can also consult the third-party [Keys reference](https://prodkeys.io/prod-keys-download/) and [firmware reference](https://prodkeys.io/switch-firmware-download/) for file descriptions and version information. These links are provided as external references; please obtain the required files lawfully yourself.
 
 ### 2. Add a game
 
