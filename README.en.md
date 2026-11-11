@@ -140,6 +140,18 @@ bash tools/nsduo/build-device.sh
 - Preserve `get-task-allow`, Network Extension capability and the core's memory entitlements. Distribution signing alone is not equivalent to development-debug signing; verify effective entitlements after signing.
 - Output: `.build/DerivedData/Build/Products/Debug-iphoneos/MeloNX.app`.
 
+### Sign the release IPA yourself
+
+The release IPA is unsigned. To use both the built-in VPN and JIT, sign with one Apple development team that supports Network Extensions and keep both extensions. The app and VPN extension both need `packet-tunnel-provider` in their signatures and profiles, and the app also needs `get-task-allow`. A free Apple ID cannot provision Packet Tunnel for the built-in VPN, and distribution signing does not grant development debugging permissions.
+
+After signing, extract the IPA and check the app in `Payload` from the repository root:
+
+```bash
+python3 tools/nsduo/verify-device-signing.py '/path/to/Payload/MeloNX.app'
+```
+
+The script reports missing permissions, expired profiles and signing mismatches. Test VPN and JIT on your device after installation.
+
 Install on a connected, unlocked device:
 
 ```bash

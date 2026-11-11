@@ -19,6 +19,9 @@ xcodebuild -project src/MeloNX/MeloNX.xcodeproj -scheme MeloNX \
   NSDUO_BUNDLE_ID="${NSDUO_BUNDLE_ID}" \
   -allowProvisioningUpdates -allowProvisioningDeviceRegistration build
 
+python3 tools/nsduo/verify-device-signing.py \
+  "$NSDUO_ROOT/.build/DerivedData/Build/Products/Debug-iphoneos/MeloNX.app"
+
 # Code signing changes file bytes but preserves Mach-O UUIDs. Reject stale core
 # packaging before an apparently successful build can be installed on a device.
 python3 - "$NSDUO_ROOT" <<'PY'

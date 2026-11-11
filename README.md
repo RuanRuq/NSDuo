@@ -140,6 +140,18 @@ bash tools/nsduo/build-device.sh
 - 必须保留开发调试权限 `get-task-allow`、网络扩展及核心所需内存权限。普通发行签名不等同于可用的开发调试签名。应核对实际签名后的权限，而非只看源码。
 - 构建产物：`.build/DerivedData/Build/Products/Debug-iphoneos/MeloNX.app`。
 
+### 自行签装 Release IPA
+
+Release 的 IPA 未签名。要使用内置 VPN 和 JIT，请使用同一个具备 Network Extensions 能力的 Apple 开发团队签名，并保留两个扩展。主 App 和 VPN 扩展的签名及各自的描述文件都需要 `packet-tunnel-provider`，主 App 还需要 `get-task-allow`。免费 Apple ID 无法为内置 VPN 提供 Packet Tunnel；普通分发签名也不提供开发调试权限。
+
+签完后解压 IPA，在工程根目录检查 `Payload` 里的 App：
+
+```bash
+python3 tools/nsduo/verify-device-signing.py '/解压目录/Payload/MeloNX.app'
+```
+
+脚本会指出哪个组件缺权限、描述文件过期或签名信息不匹配。VPN 和 JIT 是否能在设备上运行，仍需安装后验证。
+
 安装到已连接且解锁的设备：
 
 ```bash

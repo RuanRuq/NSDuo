@@ -69,7 +69,7 @@ struct NSDuoJITSetupControls: View {
                     .frame(minHeight: 44)
             }
             .disabled(jit.isBusy)
-            Text("VPN 连接和 JIT 开启是两个独立步骤。蜂窝网络下可先连接 VPN，完成需要的网络切换后再开启 JIT；首次请允许添加 VPN 和访问本地网络。")
+            Text("建议先连 Wi-Fi，再连接 VPN、开启 JIT。首次连接时请允许添加 VPN；开启 JIT 时如有提示，请允许访问本地网络。")
                 .font(.footnote).foregroundStyle(.secondary)
             if let importError { Text(importError).font(.footnote).foregroundStyle(.red) }
             DisclosureGroup("修复工具") {

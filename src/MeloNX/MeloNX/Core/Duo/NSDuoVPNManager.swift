@@ -6,10 +6,12 @@
 import Combine
 import Foundation
 import NetworkExtension
+import os
 
 @MainActor
 final class NSDuoVPNManager: ObservableObject {
     static let shared = NSDuoVPNManager()
+    private static let networkExtensionEntitlement = "com.apple.developer.networking.networkextension"
 
     @Published private(set) var connected = false
     @Published private(set) var isConnecting = false
@@ -18,6 +20,7 @@ final class NSDuoVPNManager: ObservableObject {
     private var manager: NETunnelProviderManager?
     private var statusObserver: AnyCancellable?
     private var connectTask: Task<Void, Error>?
+    private let logger = Logger(subsystem: Bundle.main.bundleIdentifier ?? "NSDuo", category: "VPN")
 
     private init() {
         Task { await restoreStatus() }
@@ -46,13 +49,28 @@ final class NSDuoVPNManager: ObservableObject {
             updateStatus()
         } catch {
             connected = manager?.connection.status == .connected
-            statusText = error is CancellationError ? "本地隧道连接已取消" : "本地隧道连接失败：\(error.localizedDescription)"
+            if error is CancellationError {
+                statusText = "本地隧道连接已取消"
+                throw error
+            }
+            let systemError = error as NSError
+            logger.error("VPN connection failed: \(systemError.domain, privacy: .public) (\(systemError.code, privacy: .public))")
+            statusText = "本地隧道连接失败"
+            // This error is returned by NetworkExtension when access to VPN preferences is denied.
+            if systemError.domain == "NEConfigurationErrorDomain", systemError.code == 10 {
+                throw ConnectionError.configurationPermissionDenied
+            }
             throw error
         }
     }
 
     private func establishConnection() async throws {
         let providerID = try embeddedProviderIdentifier()
+        let key = Self.networkExtensionEntitlement
+        let capabilities = checkAppEntitlements([key])[key] as? [String]
+        guard capabilities?.contains("packet-tunnel-provider") == true else {
+            throw ConnectionError.missingPacketTunnelEntitlement
+        }
         let saved = try await NETunnelProviderManager.loadAllFromPreferences()
         try Task.checkCancellation()
         let ownManagers = saved.filter {
@@ -154,7 +172,7 @@ final class NSDuoVPNManager: ObservableObject {
             }
         } catch {
             guard connectTask == nil else { return }
-            statusText = "本地隧道尚未就绪：\(error.localizedDescription)"
+            statusText = "本地隧道尚未就绪，请点击“连接 VPN”查看原因。"
         }
     }
 
@@ -184,11 +202,16 @@ final class NSDuoVPNManager: ObservableObject {
     }
 
     private enum ConnectionError: LocalizedError {
-        case missingExtension, invalidConfiguration, disconnected, timedOut
+        case missingExtension, missingPacketTunnelEntitlement, configurationPermissionDenied
+        case invalidConfiguration, disconnected, timedOut
 
         var errorDescription: String? {
             switch self {
             case .missingExtension: return "安装包中的本地隧道扩展缺失或标识不匹配，请重新构建并安装。"
+            case .missingPacketTunnelEntitlement:
+                return "当前安装包缺少 Packet Tunnel 权限。请用支持 Network Extensions 的开发签名重新签装，主 App 和 VPN 扩展都要保留这项权限。"
+            case .configurationPermissionDenied:
+                return "iOS 拒绝访问 VPN 配置。如果出现添加 VPN 的提示，请点“允许”。自行签装时，请确认 VPN 扩展的签名也包含 Packet Tunnel 权限。"
             case .invalidConfiguration: return "系统报告 VPN 配置无效，请检查开发签名是否允许 Packet Tunnel。"
             case .disconnected: return "系统未建立本地隧道连接，请检查 VPN 权限和当前 VPN 状态后重试。"
             case .timedOut: return "等待本地隧道连接超过 30 秒，请检查 VPN 权限和当前 VPN 状态后重试。"
